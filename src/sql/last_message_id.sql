@@ -1,0 +1,1 @@
+SELECT message_id FROM last_id WHERE id = 0

@@ -1,0 +1,1 @@
+INSERT OR REPLACE INTO last_id (id, message_id) VALUES (0, $1)

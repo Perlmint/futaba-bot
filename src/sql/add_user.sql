@@ -1,0 +1,1 @@
+INSERT INTO users (user_id, count, name) VALUES ($1, 0, $2)

@@ -1,0 +1,14 @@
+CREATE TABLE IF NOT EXISTS history (
+    message_id INTEGER(64) PRIMARY KEY,
+    user_id INTEGER(64) NOT NULL,
+    date INTEGER(64) NOT NULL
+);
+CREATE TABLE IF NOT EXISTS last_id (
+    id INTEGER PRIMARY KEY,
+    message_id INTEGER(64) NOT NULL
+);
+CREATE TABLE IF NOT EXISTS users (
+    user_id INTEGER(64) PRIMARY KEY,
+    count INTEGER NOT NULL,
+    name VARCHAR(20) NOT NULL
+);
