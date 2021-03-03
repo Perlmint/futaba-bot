@@ -16,6 +16,8 @@ use serenity::{
         channel::Message,
         guild::Member,
         id::{ChannelId, GuildId, MessageId, UserId},
+        interactions::{Interaction, InteractionType},
+        prelude::Ready,
     },
     Client,
 };
@@ -25,6 +27,7 @@ use sqlx::{
 };
 
 const EUEOEO: &'static str = "으어어";
+const COMMAND_NAME: &'static str = "eueoeo";
 #[repr(transparent)]
 struct AtomicMessageId(AtomicU64);
 
@@ -171,6 +174,8 @@ impl EventHandler for Handler {
             }
         }
 
+        // context.http.get_guild_application_commands(application_id, map)
+
         if let Some(last_message_id) = channel.last_message_id {
             let mut query_message_id = last_message_id.clone();
             let prev_last_message_id = MessageId(
@@ -221,21 +226,44 @@ impl EventHandler for Handler {
         println!("Ready!");
     }
 
-    async fn message(&self, context: Context, message: Message) {
-        let _ = self.update_last_id(&message.id).await;
+    async fn ready(&self, ctx: Context, data_about_bot: Ready) {
+        let commands = ctx
+            .http
+            .get_guild_application_commands(
+                *data_about_bot.application.id.as_u64(),
+                *self.guild_id.as_u64(),
+            )
+            .await
+            .unwrap();
 
-        if message.mentions_me(&context.http).await.unwrap_or(false) {
-            if let Err(_) = context
-                .cache
-                .guild_channel(message.channel_id)
+        if commands
+            .iter()
+            .find(|cmd| cmd.name == COMMAND_NAME)
+            .is_none()
+        {
+            ctx.http
+                .create_guild_application_command(
+                    *data_about_bot.application.id.as_u64(),
+                    *self.guild_id.as_u64(),
+                    &serde_json::json! ({
+                        "name": COMMAND_NAME,
+                        "description": "show eueoeo stats",
+                    }),
+                )
                 .await
-                .unwrap()
-                .send_message(&context.http, |m| self.statistics(m))
-                .await
-            {
-                eprintln!("Failed to send message");
-            }
+                .unwrap();
         }
+    }
+
+    async fn message(&self, _: Context, message: Message) {
+        if message
+            .guild_id
+            .map_or_else(|| false, |id| id != self.guild_id)
+        {
+            return;
+        }
+
+        let _ = self.update_last_id(&message.id).await;
 
         if message.channel_id != self.channel_id {
             return;
@@ -251,6 +279,36 @@ impl EventHandler for Handler {
             .execute(&self.db_pool)
             .await
             .unwrap();
+    }
+
+    async fn interaction_create(&self, context: Context, interaction: Interaction) {
+        if interaction.guild_id != self.guild_id {
+            return;
+        }
+
+        if interaction.kind != InteractionType::ApplicationCommand {
+            return;
+        }
+
+        let data = match interaction.data {
+            Some(data) => data,
+            None => return,
+        };
+
+        if data.name != COMMAND_NAME {
+            return;
+        }
+
+        if let Err(_) = context
+            .cache
+            .guild_channel(interaction.channel_id)
+            .await
+            .unwrap()
+            .send_message(&context.http, |m| self.statistics(m))
+            .await
+        {
+            eprintln!("Failed to send message");
+        }
     }
 }
 
