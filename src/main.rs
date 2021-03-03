@@ -183,7 +183,7 @@ impl EventHandler for Handler {
                     .swap(query_message_id.0, Ordering::AcqRel),
             );
 
-            if prev_last_message_id < query_message_id {
+            if prev_last_message_id <= query_message_id {
                 query_message_id.0 += 1;
             }
 
