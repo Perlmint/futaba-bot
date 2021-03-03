@@ -174,8 +174,6 @@ impl EventHandler for Handler {
             }
         }
 
-        // context.http.get_guild_application_commands(application_id, map)
-
         if let Some(last_message_id) = channel.last_message_id {
             let mut query_message_id = last_message_id.clone();
             let prev_last_message_id = MessageId(
