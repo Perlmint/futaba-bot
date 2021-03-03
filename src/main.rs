@@ -246,7 +246,7 @@ impl EventHandler for Handler {
         }
 
         self.last_message_id
-            .store(message.id.into(), Ordering::AcqRel);
+            .store(message.id.into(), Ordering::SeqCst);
         self.incr_counter(&message)
             .execute(&self.db_pool)
             .await
