@@ -222,25 +222,26 @@ impl EventHandler for Handler {
     }
 
     async fn message(&self, context: Context, message: Message) {
+        let _ = self.update_last_id(&message.id).await;
+
+        if message.mentions_me(&context.http).await.unwrap_or(false) {
+            if let Err(_) = context
+                .cache
+                .guild_channel(message.channel_id)
+                .await
+                .unwrap()
+                .send_message(&context.http, |m| self.statistics(m))
+                .await
+            {
+                eprintln!("Failed to send message");
+            }
+        }
+
         if message.channel_id != self.channel_id {
             return;
         }
 
-        let _ = self.update_last_id(&message.id).await;
-
         if !check_message(&message) {
-            if message.mentions_me(&context.http).await.unwrap_or(false) {
-                if let Err(_) = context
-                    .cache
-                    .guild_channel(message.channel_id)
-                    .await
-                    .unwrap()
-                    .send_message(&context.http, |m| self.statistics(m))
-                    .await
-                {
-                    eprintln!("Failed to send message");
-                }
-            }
             return;
         }
 
