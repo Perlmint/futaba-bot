@@ -1,6 +1,5 @@
 use std::{
     collections::{hash_map::Entry, HashMap},
-    iter::FromIterator,
     ops::Deref,
     sync::{
         atomic::{AtomicU64, Ordering},
@@ -50,15 +49,7 @@ struct Handler {
 }
 
 fn check_message(message: &Message) -> bool {
-    if message.author.bot {
-        false
-    } else if message.edited_timestamp.is_some() {
-        false
-    } else if message.content != EUEOEO {
-        false
-    } else {
-        true
-    }
+    !(message.author.bot || message.edited_timestamp.is_some() || message.content != EUEOEO)
 }
 
 impl Handler {
@@ -344,7 +335,7 @@ async fn main() -> anyhow::Result<()> {
             Err(_) => 0.into(),
         },
     );
-    let members = RwLock::<HashMap<UserId, (AtomicU64, String)>>::new(FromIterator::from_iter(
+    let members = RwLock::new(
         sqlx::query(include_str!("./sql/get_latest_stats.sql"))
             .fetch_all(&db_pool)
             .await
@@ -358,8 +349,9 @@ async fn main() -> anyhow::Result<()> {
                         row.get::<String, usize>(2),
                     ),
                 )
-            }),
-    ));
+            })
+            .collect::<HashMap<_, _>>(),
+    );
 
     let mut client = Client::builder(&token)
         .event_handler(Handler {
