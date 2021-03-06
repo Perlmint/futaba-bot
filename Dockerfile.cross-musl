@@ -1,0 +1,36 @@
+FROM rust:1.50-alpine AS builder
+
+WORKDIR /ws
+
+ARG BUILD_ARCH
+
+RUN apk add --no-cache \
+    musl-dev \
+    curl \
+    ca-certificates
+RUN rustup target add ${BUILD_ARCH}-unknown-linux-musl
+RUN curl https://musl.cc/${BUILD_ARCH}-linux-musl-cross.tgz -o ${BUILD_ARCH}-linux-musl-cross.tgz && \
+    tar -xzf ${BUILD_ARCH}-linux-musl-cross.tgz && \
+    rm ${BUILD_ARCH}-linux-musl-cross.tgz && \
+    mv ${BUILD_ARCH}-linux-musl-cross /
+RUN mkdir .cargo && \
+  echo -e "[target.${BUILD_ARCH}-unknown-linux-musl]\n\
+linker = \"${BUILD_ARCH}-linux-musl-gcc\"\n\
+ar = \"${BUILD_ARCH}-linux-musl-ar\"" > .cargo/config
+
+ENV PATH=${PATH}:/${BUILD_ARCH}-linux-musl-cross/bin
+
+ADD Cargo.toml ./
+ADD src/ ./src
+
+ENV PKG_CONFIG_ALL_STATIC=1
+RUN cargo build --release --target ${BUILD_ARCH}-unknown-linux-musl
+
+FROM scratch
+
+ARG BUILD_ARCH
+
+COPY --from=builder /ws/target/${BUILD_ARCH}-unknown-linux-musl/release/eueoeo /
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+ENTRYPOINT ["/eueoeo"]
