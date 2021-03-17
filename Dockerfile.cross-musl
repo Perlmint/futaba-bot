@@ -7,7 +7,8 @@ ARG BUILD_ARCH
 RUN apk add --no-cache \
     musl-dev \
     curl \
-    ca-certificates
+    ca-certificates \
+    openssl-dev
 RUN rustup target add ${BUILD_ARCH}-unknown-linux-musl
 RUN curl https://musl.cc/${BUILD_ARCH}-linux-musl-cross.tgz -o ${BUILD_ARCH}-linux-musl-cross.tgz && \
     tar -xzf ${BUILD_ARCH}-linux-musl-cross.tgz && \
@@ -24,6 +25,8 @@ RUN cargo install sqlx-cli
 
 ADD Cargo.toml ./
 ADD src/ ./src
+ADD migrations/ ./migrations
+ADD .env ./
 
 ENV PKG_CONFIG_ALL_STATIC=1
 RUN sqlx database create && sqlx migrate run

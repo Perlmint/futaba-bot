@@ -4,12 +4,21 @@ WORKDIR /ws
 
 RUN apk add --no-cache \
     musl-dev \
-    ca-certificates
+    ca-certificates \
+    openssl-dev
+
+RUN cargo install sqlx-cli
 
 ADD Cargo.toml ./
 ADD src/ ./src
 
+ADD Cargo.toml ./
+ADD src/ ./src
+ADD migrations/ ./migrations
+ADD .env ./
+
 ENV PKG_CONFIG_ALL_STATIC=1
+RUN sqlx database create && sqlx migrate run
 RUN cargo build --release
 
 FROM scratch
