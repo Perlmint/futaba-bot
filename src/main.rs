@@ -43,10 +43,12 @@ struct Handler {
     members: RwLock<HashMap<UserId, (AtomicU64, String)>>,
 }
 
+// Is eueoeo by human?
 fn check_message(message: &Message) -> bool {
     !(message.author.bot || message.edited_timestamp.is_some() || message.content != EUEOEO)
 }
 
+// common interface for message
 trait EmbeddableMessage {
     fn content<D: ToString>(&mut self, content: D) -> &mut Self;
     fn embed<F: FnOnce(&mut CreateEmbed) -> &mut CreateEmbed>(&mut self, f: F) -> &mut Self;
@@ -186,6 +188,7 @@ impl Handler {
 
 #[async_trait]
 impl EventHandler for Handler {
+    // Connected to discrod & cache system is ready
     async fn cache_ready(&self, context: Context, _: Vec<GuildId>) {
         let channel = context
             .cache
@@ -198,11 +201,15 @@ impl EventHandler for Handler {
             .await
             .expect("Specified guild is not found");
         {
+            // TODO: should receive all members
             let members = guild.members(&context.http, None, None).await.unwrap();
             self.update_members(members).await;
         }
 
+        // When channel has any message
+        // crawl all messages
         if let Some(last_message_id) = channel.last_message_id {
+            // saved last message id
             let mut query_message_id = MessageId(
                 self.last_message_id
                     .swap(last_message_id.0, Ordering::AcqRel),
@@ -245,7 +252,9 @@ impl EventHandler for Handler {
         println!("Ready!");
     }
 
+    // on connected to discrod
     async fn ready(&self, ctx: Context, data_about_bot: Ready) {
+        // register or update slash command
         let commands = ctx
             .http
             .get_guild_application_commands(
@@ -255,6 +264,7 @@ impl EventHandler for Handler {
             .await
             .unwrap();
 
+        // TODO: check the command is latest. If not, override it
         if commands
             .iter()
             .find(|cmd| cmd.name == COMMAND_NAME)
@@ -274,6 +284,7 @@ impl EventHandler for Handler {
         }
     }
 
+    // run on any message event
     async fn message(&self, _: Context, message: Message) {
         if message
             .guild_id
@@ -297,16 +308,18 @@ impl EventHandler for Handler {
         self.incr_counter(&message).await;
     }
 
+    // run on firing slash command
     async fn interaction_create(&self, context: Context, interaction: Interaction) {
         if interaction.guild_id != self.guild_id {
             return;
         }
 
+        // futaba uses only application command.
         if interaction.kind != InteractionType::ApplicationCommand {
             return;
         }
 
-        let data = match interaction.data {
+        let data = match interaction.data.as_ref() {
             Some(data) => data,
             None => return,
         };
@@ -350,6 +363,8 @@ async fn main() -> anyhow::Result<()> {
 
     // run DB migration
     sqlx::migrate!().run(&db_pool).await?;
+
+    // Get last saved message_id from DB. If not exists, got 0.
     let last_message_id = AtomicMessageId(
         match sqlx::query!("SELECT message_id as `message_id:i64` FROM last_id WHERE id = 0")
             .fetch_one(&db_pool)
@@ -363,6 +378,7 @@ async fn main() -> anyhow::Result<()> {
             Err(_) => 0.into(),
         },
     );
+    // Load saved all members
     let members = RwLock::new(
         sqlx::query!("SELECT user_id as `user_id:i64`, count, name FROM users")
             .fetch_all(&db_pool)
@@ -378,6 +394,7 @@ async fn main() -> anyhow::Result<()> {
             .collect::<HashMap<_, _>>(),
     );
 
+    // prepare serenity(discord api framework)
     let mut client = Client::builder(&token)
         .event_handler(Handler {
             db_pool,
@@ -391,7 +408,9 @@ async fn main() -> anyhow::Result<()> {
 
     let shard_manager = client.shard_manager.clone();
 
+    // stop the bot when SIGINT occured.
     tokio::spawn(async move {
+        // wait SIGINT on another running context(thread)
         tokio::signal::ctrl_c()
             .await
             .expect("Could not register ctrl+c handler");
