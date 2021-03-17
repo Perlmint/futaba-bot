@@ -16,6 +16,8 @@ jobs:
 
     steps:
     - uses: actions/checkout@v2
+    - name: preapre
+      run: cargo install sqlx-cli && sqlx database create && sqlx migrate run
     - name: Check format
       run: cargo fmt -- --check
     - name: Check clippy

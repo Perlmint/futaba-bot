@@ -20,10 +20,13 @@ ar = \"${BUILD_ARCH}-linux-musl-ar\"" > .cargo/config
 
 ENV PATH=${PATH}:/${BUILD_ARCH}-linux-musl-cross/bin
 
+RUN cargo install sqlx-cli
+
 ADD Cargo.toml ./
 ADD src/ ./src
 
 ENV PKG_CONFIG_ALL_STATIC=1
+RUN sqlx database create && sqlx migrate run
 RUN cargo build --release --target ${BUILD_ARCH}-unknown-linux-musl
 
 FROM scratch
