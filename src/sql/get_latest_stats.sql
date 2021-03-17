@@ -1,1 +1,0 @@
-SELECT user_id, count, name FROM users

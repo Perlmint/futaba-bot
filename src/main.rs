@@ -20,17 +20,12 @@ use serenity::{
     },
     Client,
 };
-use sqlx::{
-    sqlite::{SqliteArguments, SqlitePoolOptions},
-    Row, Sqlite, SqlitePool,
-};
+use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
 const EUEOEO: &str = "으어어";
 const COMMAND_NAME: &str = "eueoeo";
 #[repr(transparent)]
 struct AtomicMessageId(AtomicU64);
-
-type Query<'a> = sqlx::query::Query<'a, Sqlite, SqliteArguments<'a>>;
 
 impl Deref for AtomicMessageId {
     type Target = AtomicU64;
@@ -53,7 +48,7 @@ fn check_message(message: &Message) -> bool {
 }
 
 impl Handler {
-    fn incr_counter(&self, message: &Message) -> Query {
+    async fn incr_counter(&self, message: &Message) {
         {
             let counter = self.members.read().unwrap();
             if let Some(counter) = counter.get(&message.author.id) {
@@ -62,20 +57,33 @@ impl Handler {
         }
 
         println!("insert {}", &message.id);
-        sqlx::query(include_str!("./sql/insert_history.sql"))
-            .persistent(true)
-            .bind(*message.id.as_u64() as i64)
-            .bind(*message.author.id.as_u64() as i64)
-            .bind(message.timestamp.timestamp())
+        let message_id = *message.id.as_u64() as i64;
+        let author_id = *message.author.id.as_u64() as i64;
+        let timestamp = message.timestamp.timestamp();
+        sqlx::query!(
+            "INSERT INTO history (message_id, user_id, date) VALUES (?, ?, ?);
+        UPDATE users SET count = count + 1 WHERE user_id = ?;",
+            message_id,
+            author_id,
+            timestamp,
+            author_id
+        )
+        .persistent(true)
+        .execute(&self.db_pool)
+        .await
+        .unwrap();
     }
 
     async fn update_last_id(&self, message_id: &MessageId) {
-        sqlx::query(include_str!("./sql/update_last_id.sql"))
-            .persistent(true)
-            .bind(*message_id.as_u64() as i64)
-            .execute(&self.db_pool)
-            .await
-            .unwrap();
+        let message_id = *message_id.as_u64() as i64;
+        sqlx::query!(
+            "INSERT OR REPLACE INTO last_id (id, message_id) VALUES (0, ?)",
+            message_id
+        )
+        .persistent(true)
+        .execute(&self.db_pool)
+        .await
+        .unwrap();
     }
 
     fn statistics<'a, 'b>(&self, msg: &'b mut CreateMessage<'a>) -> &'b mut CreateMessage<'a> {
@@ -105,10 +113,7 @@ impl Handler {
         }
     }
 
-    fn update_members<T: IntoIterator<Item = Member>>(
-        &self,
-        members: T,
-    ) -> impl Iterator<Item = Query> {
+    async fn update_members<T: IntoIterator<Item = Member>>(&self, members: T) {
         let iter = {
             let mut counter = self.members.write().unwrap();
 
@@ -132,11 +137,16 @@ impl Handler {
                 .collect::<Vec<_>>()
         };
 
-        iter.into_iter().map(|(user_id, name)| {
-            sqlx::query(include_str!("./sql/add_user.sql"))
-                .bind(user_id)
-                .bind(name)
-        })
+        for (user_id, name) in iter {
+            sqlx::query!(
+                "INSERT INTO users (user_id, count, name) VALUES (?, 0, ?)",
+                user_id,
+                name
+            )
+            .execute(&self.db_pool)
+            .await
+            .unwrap();
+        }
     }
 }
 
@@ -155,10 +165,7 @@ impl EventHandler for Handler {
             .expect("Specified guild is not found");
         {
             let members = guild.members(&context.http, None, None).await.unwrap();
-            let member_update_queries = self.update_members(members);
-            for query in member_update_queries {
-                query.execute(&self.db_pool).await.unwrap();
-            }
+            self.update_members(members).await;
         }
 
         if let Some(last_message_id) = channel.last_message_id {
@@ -193,7 +200,7 @@ impl EventHandler for Handler {
                     }
                 });
                 for query in queries {
-                    query.execute(&self.db_pool).await.unwrap();
+                    query.await;
                 }
 
                 if messages.len() < MESSAGES_LIMIT as _ {
@@ -260,10 +267,7 @@ impl EventHandler for Handler {
 
         self.last_message_id
             .store(message.id.into(), Ordering::SeqCst);
-        self.incr_counter(&message)
-            .execute(&self.db_pool)
-            .await
-            .unwrap();
+        self.incr_counter(&message).await;
     }
 
     async fn interaction_create(&self, context: Context, interaction: Interaction) {
@@ -318,17 +322,16 @@ async fn main() -> anyhow::Result<()> {
         })
         .await
         .unwrap();
-    sqlx::query(include_str!("./sql/init_tables.sql"))
-        .execute(&db_pool)
-        .await
-        .unwrap();
+
+    // run DB migration
+    sqlx::migrate!().run(&db_pool).await?;
     let last_message_id = AtomicMessageId(
-        match sqlx::query(include_str!("./sql/last_message_id.sql"))
+        match sqlx::query!("SELECT message_id as `message_id:i64` FROM last_id WHERE id = 0")
             .fetch_one(&db_pool)
             .await
         {
             Ok(row) => {
-                let last_id = row.get::<i64, usize>(0) as u64;
+                let last_id = row.message_id as u64;
                 println!("Previous last_message_id = {}", last_id);
                 last_id.into()
             }
@@ -336,18 +339,15 @@ async fn main() -> anyhow::Result<()> {
         },
     );
     let members = RwLock::new(
-        sqlx::query(include_str!("./sql/get_latest_stats.sql"))
+        sqlx::query!("SELECT user_id as `user_id:i64`, count, name FROM users")
             .fetch_all(&db_pool)
             .await
             .unwrap()
-            .iter()
+            .into_iter()
             .map(|row| {
                 (
-                    (UserId::from(row.get::<i64, usize>(0) as u64)),
-                    (
-                        AtomicU64::new(row.get::<i64, usize>(1) as u64),
-                        row.get::<String, usize>(2),
-                    ),
+                    (UserId::from(row.user_id as u64)),
+                    (AtomicU64::new(row.count as u64), row.name),
                 )
             })
             .collect::<HashMap<_, _>>(),
