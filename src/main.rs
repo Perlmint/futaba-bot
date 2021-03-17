@@ -9,13 +9,13 @@ use std::{
 
 use async_trait::async_trait;
 use serenity::{
-    builder::CreateMessage,
+    builder::{CreateEmbed, CreateInteractionResponseData, CreateMessage},
     client::{Context, EventHandler},
     model::{
         channel::Message,
         guild::Member,
         id::{ChannelId, GuildId, MessageId, UserId},
-        interactions::{Interaction, InteractionType},
+        interactions::{Interaction, InteractionResponseType, InteractionType},
         prelude::Ready,
     },
     Client,
@@ -45,6 +45,39 @@ struct Handler {
 
 fn check_message(message: &Message) -> bool {
     !(message.author.bot || message.edited_timestamp.is_some() || message.content != EUEOEO)
+}
+
+trait EmbeddableMessage {
+    fn content<D: ToString>(&mut self, content: D) -> &mut Self;
+    fn embed<F: FnOnce(&mut CreateEmbed) -> &mut CreateEmbed>(&mut self, f: F) -> &mut Self;
+}
+
+impl EmbeddableMessage for CreateInteractionResponseData {
+    fn content<D: ToString>(&mut self, content: D) -> &mut Self {
+        self.content(content)
+    }
+
+    fn embed<F: FnOnce(&mut CreateEmbed) -> &mut CreateEmbed>(&mut self, f: F) -> &mut Self {
+        // workaround. It would be fixed after 0.10.5
+        let mut embed = CreateEmbed::default();
+        f(&mut embed);
+        let map = serenity::utils::hashmap_to_json_map(embed.0);
+        let embed = serde_json::Value::Array(vec![serde_json::Value::Object(map)]);
+
+        self.0.insert("embeds", embed);
+
+        self
+    }
+}
+
+impl<'a> EmbeddableMessage for CreateMessage<'a> {
+    fn content<D: ToString>(&mut self, content: D) -> &mut Self {
+        self.content(content)
+    }
+
+    fn embed<F: FnOnce(&mut CreateEmbed) -> &mut CreateEmbed>(&mut self, f: F) -> &mut Self {
+        self.embed(f)
+    }
 }
 
 impl Handler {
@@ -86,7 +119,7 @@ impl Handler {
         .unwrap();
     }
 
-    fn statistics<'a, 'b>(&self, msg: &'b mut CreateMessage<'a>) -> &'b mut CreateMessage<'a> {
+    fn statistics<'b, M: EmbeddableMessage>(&self, msg: &'b mut M) -> &'b mut M {
         let mut stats = {
             let counter = self.members.read().unwrap();
             counter
@@ -105,8 +138,9 @@ impl Handler {
             msg.content("Empty records")
         } else {
             msg.embed(move |e| {
+                e.title("Eueoeo records");
                 for (name, count) in stats {
-                    e.field(name, count, false);
+                    e.field(name, count, true);
                 }
                 e
             })
@@ -281,16 +315,14 @@ impl EventHandler for Handler {
             return;
         }
 
-        if context
-            .cache
-            .guild_channel(interaction.channel_id)
+        if let Err(e) = interaction
+            .create_interaction_response(&context.http, |r| {
+                r.kind(InteractionResponseType::ChannelMessageWithSource)
+                    .interaction_response_data(|d| self.statistics(d))
+            })
             .await
-            .unwrap()
-            .send_message(&context.http, |m| self.statistics(m))
-            .await
-            .is_err()
         {
-            eprintln!("Failed to send message");
+            eprintln!("Failed to send message: {:?}", e);
         }
     }
 }
