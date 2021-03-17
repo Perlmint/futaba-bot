@@ -169,31 +169,26 @@ impl EventHandler for Handler {
         }
 
         if let Some(last_message_id) = channel.last_message_id {
-            let mut query_message_id = last_message_id;
-            let prev_last_message_id = MessageId(
+            let mut query_message_id = MessageId(
                 self.last_message_id
-                    .swap(query_message_id.0, Ordering::AcqRel),
+                    .swap(last_message_id.0, Ordering::AcqRel),
             );
 
-            if prev_last_message_id <= query_message_id {
-                query_message_id.0 += 1;
-            }
-
-            while prev_last_message_id < query_message_id {
-                println!("get history {}", query_message_id);
+            while query_message_id < last_message_id {
+                println!("get history after {}", query_message_id);
                 const MESSAGES_LIMIT: u64 = 100;
                 let messages = channel
                     .messages(context.http.as_ref(), |req| {
-                        req.before(query_message_id).limit(MESSAGES_LIMIT)
+                        req.after(query_message_id).limit(MESSAGES_LIMIT)
                     })
                     .await
                     .expect("Failed to get message history");
 
-                let mut most_old_id = u64::MAX;
+                let mut most_new_id = u64::MAX;
                 let queries = (&messages).iter().filter_map(|message| {
-                    most_old_id = std::cmp::min(most_old_id, *message.id.as_u64());
+                    most_new_id = std::cmp::max(most_new_id, *message.id.as_u64());
 
-                    if message.id > prev_last_message_id && check_message(&message) {
+                    if check_message(&message) {
                         Some(self.incr_counter(&message))
                     } else {
                         None
@@ -207,9 +202,7 @@ impl EventHandler for Handler {
                     break;
                 }
 
-                println!("most old id {}", most_old_id);
-
-                query_message_id = most_old_id.into();
+                query_message_id = most_new_id.into();
             }
 
             let _ = self.update_last_id(&last_message_id).await;
