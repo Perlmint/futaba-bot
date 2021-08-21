@@ -253,7 +253,7 @@ impl EventHandler for Handler {
     }
 
     // on connected to discrod
-    async fn ready(&self, ctx: Context, data_about_bot: Ready) {
+    async fn ready(&self, ctx: Context, _data_about_bot: Ready) {
         // register or update slash command
         let commands = ctx
             .http
