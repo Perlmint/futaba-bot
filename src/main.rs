@@ -8,6 +8,7 @@ use std::{
 };
 
 use async_trait::async_trait;
+use log::{debug, error, info, trace};
 use serenity::{
     builder::{CreateEmbed, CreateInteractionResponseData, CreateMessage},
     client::{Context, EventHandler},
@@ -91,7 +92,7 @@ impl Handler {
             }
         }
 
-        println!("insert {}", &message.id);
+        trace!("insert {}", &message.id);
         let message_id = *message.id.as_u64() as i64;
         let author_id = *message.author.id.as_u64() as i64;
         let timestamp = message.timestamp.timestamp();
@@ -216,7 +217,7 @@ impl EventHandler for Handler {
             );
 
             while query_message_id < last_message_id {
-                println!("get history after {}", query_message_id);
+                debug!("get history after {}", query_message_id);
                 const MESSAGES_LIMIT: u64 = 100;
                 let messages = channel
                     .messages(context.http.as_ref(), |req| {
@@ -249,7 +250,7 @@ impl EventHandler for Handler {
             let _ = self.update_last_id(&last_message_id).await;
         }
 
-        println!("Ready!");
+        info!("Ready!");
     }
 
     // on connected to discrod
@@ -327,13 +328,15 @@ impl EventHandler for Handler {
             })
             .await
         {
-            eprintln!("Failed to send message: {:?}", e);
+            error!("Failed to send message: {:?}", e);
         }
     }
 }
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
+    pretty_env_logger::init();
+
     let token = std::env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN is mandatory");
     let guild_id = std::env::var("GUILD_ID")
         .expect("GUILD_ID is mandatory")
@@ -368,7 +371,7 @@ async fn main() -> anyhow::Result<()> {
         {
             Ok(row) => {
                 let last_id = row.message_id as u64;
-                println!("Previous last_message_id = {}", last_id);
+                debug!("Previous last_message_id = {}", last_id);
                 last_id.into()
             }
             Err(_) => 0.into(),

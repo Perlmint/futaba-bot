@@ -14,3 +14,5 @@ serde_json = { version = "*" }
 serenity = { version = "0.10.9", default-features = false, features = ["builder", "client", "cache", "gateway", "model", "rustls_backend", "unstable_discord_api"] }
 sqlx = { version = "0.5", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate"] }
 tokio = { version = "1.2", features = ["rt-multi-thread", "macros", "signal"] }
+log = { version = "^0.4" }
+pretty_env_logger = { version = "^0.4" }
