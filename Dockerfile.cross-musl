@@ -21,7 +21,7 @@ ar = \"${BUILD_ARCH}-linux-musl-ar\"" > .cargo/config
 
 ENV PATH=${PATH}:/${BUILD_ARCH}-linux-musl-cross/bin
 
-RUN cargo install sqlx-cli
+RUN cargo install --version ^0.5 sqlx-cli
 
 ADD Cargo.toml ./
 ADD src/ ./src
