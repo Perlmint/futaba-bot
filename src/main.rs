@@ -257,10 +257,7 @@ impl EventHandler for Handler {
         // register or update slash command
         let commands = ctx
             .http
-            .get_guild_application_commands(
-                *data_about_bot.application.id.as_u64(),
-                *self.guild_id.as_u64(),
-            )
+            .get_guild_application_commands(*self.guild_id.as_u64())
             .await
             .unwrap();
 
@@ -272,7 +269,6 @@ impl EventHandler for Handler {
         {
             ctx.http
                 .create_guild_application_command(
-                    *data_about_bot.application.id.as_u64(),
                     *self.guild_id.as_u64(),
                     &serde_json::json! ({
                         "name": COMMAND_NAME,
@@ -310,7 +306,12 @@ impl EventHandler for Handler {
 
     // run on firing slash command
     async fn interaction_create(&self, context: Context, interaction: Interaction) {
-        if interaction.guild_id != self.guild_id {
+        let interaction = if let Some(command) = interaction.application_command() {
+            command
+        } else {
+            return;
+        };
+        if interaction.guild_id != Some(self.guild_id) {
             return;
         }
 
@@ -319,12 +320,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let data = match interaction.data.as_ref() {
-            Some(data) => data,
-            None => return,
-        };
-
-        if data.name != COMMAND_NAME {
+        if interaction.data.name != COMMAND_NAME {
             return;
         }
 
@@ -349,6 +345,10 @@ async fn main() -> anyhow::Result<()> {
         .unwrap();
     let channel_id = std::env::var("CHANNEL_ID")
         .expect("CHANNEL_ID is mandatory")
+        .parse()
+        .unwrap();
+    let application_id = std::env::var("APPLICATION_ID")
+        .expect("APPLICATION_ID is mandatory")
         .parse()
         .unwrap();
     let db_pool = SqlitePoolOptions::new()
@@ -396,6 +396,7 @@ async fn main() -> anyhow::Result<()> {
 
     // prepare serenity(discord api framework)
     let mut client = Client::builder(&token)
+        .application_id(application_id)
         .event_handler(Handler {
             db_pool,
             guild_id: GuildId(guild_id),
