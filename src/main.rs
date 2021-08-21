@@ -229,8 +229,8 @@ impl EventHandler for Handler {
                 let queries = (&messages).iter().filter_map(|message| {
                     most_new_id = std::cmp::max(most_new_id, *message.id.as_u64());
 
-                    if check_message(&message) {
-                        Some(self.incr_counter(&message))
+                    if check_message(message) {
+                        Some(self.incr_counter(message))
                     } else {
                         None
                     }
@@ -262,11 +262,7 @@ impl EventHandler for Handler {
             .unwrap();
 
         // TODO: check the command is latest. If not, override it
-        if commands
-            .iter()
-            .find(|cmd| cmd.name == COMMAND_NAME)
-            .is_none()
-        {
+        if commands.iter().any(|cmd| cmd.name == COMMAND_NAME) {
             ctx.http
                 .create_guild_application_command(
                     *self.guild_id.as_u64(),
