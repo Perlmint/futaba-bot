@@ -1,10 +1,6 @@
 use std::{
-    collections::{hash_map::Entry, HashMap},
     ops::Deref,
-    sync::{
-        atomic::{AtomicU64, Ordering},
-        RwLock,
-    },
+    sync::atomic::{AtomicU64, Ordering},
 };
 
 use async_trait::async_trait;
@@ -15,7 +11,7 @@ use serenity::{
     model::{
         channel::Message,
         guild::Member,
-        id::{ChannelId, GuildId, MessageId, UserId},
+        id::{ChannelId, GuildId, MessageId},
         interactions::{Interaction, InteractionResponseType, InteractionType},
         prelude::Ready,
     },
@@ -41,7 +37,6 @@ struct Handler {
     last_message_id: AtomicMessageId,
     guild_id: GuildId,
     channel_id: ChannelId,
-    members: RwLock<HashMap<UserId, (AtomicU64, String)>>,
 }
 
 // Is eueoeo by human?
@@ -85,13 +80,6 @@ impl<'a> EmbeddableMessage for CreateMessage<'a> {
 
 impl Handler {
     async fn incr_counter(&self, message: &Message) {
-        {
-            let counter = self.members.read().unwrap();
-            if let Some(counter) = counter.get(&message.author.id) {
-                counter.0.fetch_add(1, Ordering::AcqRel);
-            }
-        }
-
         trace!("insert {}", &message.id);
         let message_id = *message.id.as_u64() as i64;
         let author_id = *message.author.id.as_u64() as i64;
@@ -104,7 +92,6 @@ impl Handler {
             timestamp,
             author_id
         )
-        .persistent(true)
         .execute(&self.db_pool)
         .await
         .unwrap();
@@ -116,67 +103,55 @@ impl Handler {
             "INSERT OR REPLACE INTO last_id (id, message_id) VALUES (0, ?)",
             message_id
         )
-        .persistent(true)
         .execute(&self.db_pool)
         .await
         .unwrap();
     }
 
-    fn statistics<'b, M: EmbeddableMessage>(&self, msg: &'b mut M) -> &'b mut M {
-        let mut stats = {
-            let counter = self.members.read().unwrap();
-            counter
-                .iter()
-                .filter_map(|(_, (count, name))| {
-                    let count = count.load(Ordering::Acquire);
-                    (count != 0).then(|| (name.clone(), count))
-                })
-                .collect::<Vec<_>>()
-        };
+    async fn fetch_statistics(&self) -> Vec<(String, i64)> {
+        let stats =
+            sqlx::query!("SELECT name, count from users WHERE count > 0 ORDER BY count desc")
+                .fetch_all(&self.db_pool)
+                .await
+                .unwrap();
 
-        stats.sort_by_key(|i| i.1);
-        stats.reverse();
+        stats
+            .into_iter()
+            .map(|stat| (stat.name, stat.count))
+            .collect()
+    }
 
+    // statistics obtains counting statistics from the DB and does some shit
+    fn create_statistics<'b, M: EmbeddableMessage>(
+        &self,
+        msg: &'b mut M,
+        stats: Vec<(String, i64)>,
+    ) -> &'b mut M {
         if stats.is_empty() {
             msg.content("Empty records")
         } else {
             msg.embed(move |e| {
                 e.title("Eueoeo records");
-                for (name, count) in stats {
-                    e.field(name, count, true);
+                for stat in stats {
+                    e.field(stat.0, stat.1, true);
                 }
                 e
             })
         }
     }
 
+    // update_members takes a member list and updates DB with it
     async fn update_members<T: IntoIterator<Item = Member>>(&self, members: T) {
-        let iter = {
-            let mut counter = self.members.write().unwrap();
+        let iter = members.into_iter();
 
-            members
-                .into_iter()
-                .filter_map(move |member| {
-                    let cache = counter.entry(member.user.id);
-                    let nickname = member.nick.unwrap_or(member.user.name);
-                    match cache {
-                        Entry::Occupied(mut i) => {
-                            i.get_mut().1 = nickname;
-                            None
-                        }
-                        Entry::Vacant(i) => {
-                            i.insert((AtomicU64::from(0), nickname.clone()));
+        for member in iter {
+            let user_id = *member.user.id.as_u64() as i64;
 
-                            Some((*member.user.id.as_u64() as i64, nickname))
-                        }
-                    }
-                })
-                .collect::<Vec<_>>()
-        };
+            // if there is no nickname, use member's name
+            let name = member.nick.unwrap_or(member.user.name);
 
-        for (user_id, name) in iter {
             sqlx::query!(
-                "INSERT INTO users (user_id, count, name) VALUES (?, 0, ?)",
+                "INSERT OR REPLACE INTO users (user_id, count, name) VALUES (?, 0, ?)",
                 user_id,
                 name
             )
@@ -189,7 +164,8 @@ impl Handler {
 
 #[async_trait]
 impl EventHandler for Handler {
-    // Connected to discrod & cache system is ready
+    // on connected to discord and cache system is ready
+    // note: serenity makes a caching system for discord API to store discord information (i.e. member, channel info)
     async fn cache_ready(&self, context: Context, _: Vec<GuildId>) {
         let channel = context
             .cache
@@ -253,7 +229,7 @@ impl EventHandler for Handler {
         info!("Ready!");
     }
 
-    // on connected to discrod
+    // on connected to discord
     async fn ready(&self, ctx: Context, _data_about_bot: Ready) {
         // register or update slash command
         let commands = ctx
@@ -281,7 +257,8 @@ impl EventHandler for Handler {
     async fn message(&self, _: Context, message: Message) {
         if message
             .guild_id
-            .map_or_else(|| false, |id| id != self.guild_id)
+            .map(|id| id != self.guild_id)
+            .unwrap_or(false)
         {
             return;
         }
@@ -321,10 +298,11 @@ impl EventHandler for Handler {
             return;
         }
 
+        let stats = self.fetch_statistics().await;
         if let Err(e) = interaction
             .create_interaction_response(&context.http, |r| {
                 r.kind(InteractionResponseType::ChannelMessageWithSource)
-                    .interaction_response_data(|d| self.statistics(d))
+                    .interaction_response_data(|d| self.create_statistics(d, stats))
             })
             .await
         {
@@ -377,21 +355,6 @@ async fn main() -> anyhow::Result<()> {
             Err(_) => 0.into(),
         },
     );
-    // Load saved all members
-    let members = RwLock::new(
-        sqlx::query!("SELECT user_id as `user_id:i64`, count, name FROM users")
-            .fetch_all(&db_pool)
-            .await
-            .unwrap()
-            .into_iter()
-            .map(|row| {
-                (
-                    (UserId::from(row.user_id as u64)),
-                    (AtomicU64::new(row.count as u64), row.name),
-                )
-            })
-            .collect::<HashMap<_, _>>(),
-    );
 
     // prepare serenity(discord api framework)
     let mut client = Client::builder(&token)
@@ -402,7 +365,6 @@ async fn main() -> anyhow::Result<()> {
             channel_id: ChannelId(channel_id),
 
             last_message_id,
-            members,
         })
         .await?;
 
