@@ -1,3 +1,4 @@
+use anyhow::Context as _;
 use std::{
     ops::Deref,
     sync::atomic::{AtomicU64, Ordering},
@@ -11,7 +12,7 @@ use serenity::{
     model::{
         channel::Message,
         guild::Member,
-        id::{ChannelId, GuildId, MessageId},
+        id::{ChannelId, GuildId, MessageId, UserId},
         interactions::{Interaction, InteractionResponseType, InteractionType},
         prelude::Ready,
     },
@@ -82,22 +83,83 @@ impl<'a> EmbeddableMessage for CreateMessage<'a> {
 }
 
 impl Handler {
-    async fn incr_counter(&self, message: &Message) {
+    async fn incr_counter(&self, message: &Message) -> anyhow::Result<bool> {
         trace!("insert {}", &message.id);
         let message_id = *message.id.as_u64() as i64;
         let author_id = *message.author.id.as_u64() as i64;
-        let timestamp = message.timestamp.timestamp();
-        sqlx::query!(
-            "INSERT INTO history (message_id, user_id, date) VALUES (?, ?, ?);
-        UPDATE users SET count = count + 1 WHERE user_id = ?;",
+        let message_date = message.timestamp.date();
+        let prev_date = message_date.pred().and_hms(0, 0, 0).timestamp();
+        let message_date = message_date.and_hms(0, 0, 0).timestamp();
+        let affected = match sqlx::query!(
+            "INSERT INTO history (message_id, user_id, date) VALUES (?, ?, ?)",
             message_id,
             author_id,
-            timestamp,
-            author_id
+            message_date
         )
         .execute(&self.db_pool)
         .await
-        .unwrap();
+        {
+            Ok(_) => true,
+            Err(sqlx::Error::Database(e)) => {
+                let msg = e.message();
+                if msg.contains("constraint") {
+                    info!(
+                        "Duplicated item - user: {}, message_id: {}, date: {}",
+                        author_id, message_id, message_date
+                    );
+                    false
+                } else {
+                    return Err(sqlx::Error::Database(e)).context("Unknown database error");
+                }
+            }
+            Err(e) => return Err(e).context("unknown sqlx error"),
+        };
+        if affected {
+            let data = sqlx::query!(
+                "SELECT most_streak, current_streak, last_date FROM users WHERE user_id = ?",
+                author_id
+            )
+            .fetch_optional(&self.db_pool)
+            .await
+            .context("Failed to query user info")?;
+            let data = if let Some(data) = data {
+                data
+            } else {
+                info!(
+                    "Try to increase counter for unknown user - {}({})",
+                    &message.author.name, author_id
+                );
+
+                return Ok(false);
+            };
+            let (most_streak, current_streak) = if data.last_date == prev_date {
+                let current_streak = data.current_streak + 1;
+                (
+                    std::cmp::max(data.most_streak, current_streak),
+                    current_streak,
+                )
+            } else {
+                (data.most_streak, 1)
+            };
+            sqlx::query!(
+                r#"UPDATE users SET 
+                    count = count + 1, 
+                    most_streak = ?, 
+                    current_streak = ?, 
+                    last_date = ? 
+                WHERE user_id = ?"#,
+                most_streak,
+                current_streak,
+                message_date,
+                author_id
+            )
+            .execute(&self.db_pool)
+            .await?;
+
+            Ok(true)
+        } else {
+            Ok(false)
+        }
     }
 
     async fn update_last_id(&self, message_id: &MessageId) {
@@ -144,24 +206,38 @@ impl Handler {
     }
 
     // update_members takes a member list and updates DB with it
-    async fn update_members<T: IntoIterator<Item = Member>>(&self, members: T) {
+    async fn update_members<T: IntoIterator<Item = Member>>(
+        &self,
+        members: T,
+    ) -> anyhow::Result<Option<UserId>> {
         let iter = members.into_iter();
-
+        let mut largest_user_id: Option<UserId> = None;
         for member in iter {
             let user_id = *member.user.id.as_u64() as i64;
+            if largest_user_id.unwrap_or(0.into()) < member.user.id {
+                largest_user_id = Some(member.user.id.clone());
+            }
 
             // if there is no nickname, use member's name
             let name = member.nick.unwrap_or(member.user.name);
 
+            info!(
+                "Try insert or update name for user {} - id: {}",
+                &name, user_id
+            );
+
             sqlx::query!(
-                "INSERT OR REPLACE INTO users (user_id, count, name) VALUES (?, 0, ?)",
+                "INSERT INTO users (user_id, name) VALUES (?, ?) ON CONFLICT (user_id) DO UPDATE SET name = ?",
                 user_id,
+                name,
                 name
             )
             .execute(&self.db_pool)
             .await
-            .unwrap();
+            .context("Failed to insert user")?;
         }
+
+        Ok(largest_user_id)
     }
 }
 
@@ -181,9 +257,21 @@ impl EventHandler for Handler {
             .await
             .expect("Specified guild is not found");
         {
-            // TODO: should receive all members
-            let members = guild.members(&context.http, None, None).await.unwrap();
-            self.update_members(members).await;
+            let mut user_id = None;
+            loop {
+                let members = guild
+                    .members(&context.http, None, user_id)
+                    .await
+                    .expect("Failed to retrieve member info");
+                let id = self
+                    .update_members(members)
+                    .await
+                    .expect("Failed to update member");
+                if id.is_none() {
+                    break;
+                }
+                user_id = id;
+            }
         }
 
         // When channel has any message
