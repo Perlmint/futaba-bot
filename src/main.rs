@@ -25,6 +25,9 @@ use self::application_command::*;
 
 const EUEOEO: &str = "으어어";
 const COMMAND_NAME: &str = "eueoeo";
+
+const MESSAGES_LIMIT: u64 = 100;
+
 #[repr(transparent)]
 struct AtomicMessageId(AtomicU64);
 
@@ -116,7 +119,7 @@ impl Handler {
         };
         if affected {
             let data = sqlx::query!(
-                "SELECT most_streak, current_streak, last_date FROM users WHERE user_id = ?",
+                "SELECT longest_streaks, current_streaks, last_date FROM users WHERE user_id = ?",
                 author_id
             )
             .fetch_optional(&self.db_pool)
@@ -132,24 +135,24 @@ impl Handler {
 
                 return Ok(false);
             };
-            let (most_streak, current_streak) = if data.last_date == prev_date {
-                let current_streak = data.current_streak + 1;
+            let (longest_streaks, current_streaks) = if data.last_date == prev_date {
+                let current_streaks = data.current_streaks + 1;
                 (
-                    std::cmp::max(data.most_streak, current_streak),
-                    current_streak,
+                    std::cmp::max(data.longest_streaks, current_streaks),
+                    current_streaks,
                 )
             } else {
-                (data.most_streak, 1)
+                (data.longest_streaks, 1)
             };
             sqlx::query!(
                 r#"UPDATE users SET 
                     count = count + 1, 
-                    most_streak = ?, 
-                    current_streak = ?, 
+                    longest_streaks = ?, 
+                    current_streaks = ?, 
                     last_date = ? 
                 WHERE user_id = ?"#,
-                most_streak,
-                current_streak,
+                longest_streaks,
+                current_streaks,
                 message_date,
                 author_id
             )
@@ -239,6 +242,31 @@ impl Handler {
 
         Ok(largest_user_id)
     }
+
+    async fn process_message_history(
+        &self,
+        messages: &[Message],
+    ) -> anyhow::Result<Option<MessageId>> {
+        let mut most_new_id = 0;
+        let queries = (&messages).iter().filter_map(|message| {
+            most_new_id = std::cmp::max(most_new_id, *message.id.as_u64());
+
+            if check_message(message) {
+                Some(self.incr_counter(message))
+            } else {
+                None
+            }
+        });
+        for query in queries {
+            query.await.context("Failed to increase counter")?;
+        }
+
+        Ok(if messages.len() < MESSAGES_LIMIT as _ {
+            None
+        } else {
+            Some(most_new_id.into())
+        })
+    }
 }
 
 #[async_trait]
@@ -278,40 +306,31 @@ impl EventHandler for Handler {
         // crawl all messages
         if let Some(last_message_id) = channel.last_message_id {
             // saved last message id
-            let mut query_message_id = MessageId(
+            let mut prev_message_id = MessageId(
                 self.last_message_id
-                    .swap(last_message_id.0, Ordering::AcqRel),
+                    .swap(*last_message_id.as_u64(), Ordering::AcqRel),
             );
+            debug!("current last message id is {}", last_message_id);
 
-            while query_message_id < last_message_id {
-                debug!("get history after {}", query_message_id);
-                const MESSAGES_LIMIT: u64 = 100;
-                let messages = channel
+            while prev_message_id < last_message_id {
+                debug!("get history after {}", prev_message_id);
+                let mut messages = channel
                     .messages(context.http.as_ref(), |req| {
-                        req.after(query_message_id).limit(MESSAGES_LIMIT)
+                        req.after(prev_message_id).limit(MESSAGES_LIMIT)
                     })
                     .await
                     .expect("Failed to get message history");
+                messages.sort_by_cached_key(|i| i.id);
 
-                let mut most_new_id = u64::MAX;
-                let queries = (&messages).iter().filter_map(|message| {
-                    most_new_id = std::cmp::max(most_new_id, *message.id.as_u64());
-
-                    if check_message(message) {
-                        Some(self.incr_counter(message))
-                    } else {
-                        None
-                    }
-                });
-                for query in queries {
-                    query.await;
-                }
-
-                if messages.len() < MESSAGES_LIMIT as _ {
+                if let Some(message_id) = self
+                    .process_message_history(&messages)
+                    .await
+                    .expect("Failed to process messages")
+                {
+                    prev_message_id = message_id;
+                } else {
                     break;
                 }
-
-                query_message_id = most_new_id.into();
             }
 
             let _ = self.update_last_id(&last_message_id).await;
@@ -369,7 +388,9 @@ impl EventHandler for Handler {
 
         self.last_message_id
             .store(message.id.into(), Ordering::SeqCst);
-        self.incr_counter(&message).await;
+        self.incr_counter(&message)
+            .await
+            .expect("Failed to increase counter");
     }
 
     // run on firing slash command
@@ -411,26 +432,22 @@ async fn main() -> anyhow::Result<()> {
 
     let token = std::env::var("DISCORD_BOT_TOKEN").expect("DISCORD_BOT_TOKEN is mandatory");
     let guild_id = std::env::var("GUILD_ID")
-        .expect("GUILD_ID is mandatory")
-        .parse()
-        .unwrap();
+        .context("GUILD_ID is mandatory")?
+        .parse()?;
     let channel_id = std::env::var("CHANNEL_ID")
-        .expect("CHANNEL_ID is mandatory")
-        .parse()
-        .unwrap();
+        .context("CHANNEL_ID is mandatory")?
+        .parse()?;
     let application_id = std::env::var("APPLICATION_ID")
-        .expect("APPLICATION_ID is mandatory")
-        .parse()
-        .unwrap();
+        .context("APPLICATION_ID is mandatory")?
+        .parse()?;
     let db_pool = SqlitePoolOptions::new()
         .connect(&{
             let mut dir = std::env::current_dir().unwrap();
-            dir.push("db");
+            dir.push("db.db");
             let path = format!("sqlite://{}?mode=rwc", dir.display());
             path
         })
-        .await
-        .unwrap();
+        .await?;
 
     // run DB migration
     sqlx::migrate!().run(&db_pool).await?;
@@ -446,7 +463,12 @@ async fn main() -> anyhow::Result<()> {
                 debug!("Previous last_message_id = {}", last_id);
                 last_id.into()
             }
-            Err(_) => 0.into(),
+            Err(_) => {
+                let id: u64 = std::env::var("INIT_MESSAGE_ID")
+                    .context("INIT_MESSAGE_ID")?
+                    .parse()?;
+                id.into()
+            }
         },
     );
 
