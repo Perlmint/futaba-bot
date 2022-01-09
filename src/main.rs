@@ -19,6 +19,9 @@ use serenity::{
 };
 use sqlx::{sqlite::SqlitePoolOptions, SqlitePool};
 
+mod application_command;
+use self::application_command::*;
+
 const EUEOEO: &str = "으어어";
 const COMMAND_NAME: &str = "eueoeo";
 #[repr(transparent)]
@@ -238,15 +241,18 @@ impl EventHandler for Handler {
             .await
             .unwrap();
 
+        let command = ApplicationCommand {
+            name: COMMAND_NAME.to_string(),
+            description: "show eueoeo stats".to_string(),
+            options: vec![],
+        };
+
         // TODO: check the command is latest. If not, override it
-        if commands.iter().any(|cmd| cmd.name == COMMAND_NAME) {
+        if commands.iter().any(|cmd| PartialEq::eq(&command, &cmd)) {
             ctx.http
                 .create_guild_application_command(
                     *self.guild_id.as_u64(),
-                    &serde_json::json! ({
-                        "name": COMMAND_NAME,
-                        "description": "show eueoeo stats",
-                    }),
+                    &serde_json::to_value(command).unwrap(),
                 )
                 .await
                 .unwrap();
