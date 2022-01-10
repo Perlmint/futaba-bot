@@ -1,4 +1,5 @@
 use anyhow::Context as _;
+use chrono::{DateTime, Datelike, FixedOffset, TimeZone, Utc};
 use std::{
     ops::Deref,
     sync::atomic::{AtomicU64, Ordering},
@@ -46,6 +47,13 @@ struct Handler {
     channel_id: ChannelId,
 }
 
+// See https://discord.com/developers/docs/reference#snowflakes
+fn datetime_to_snowflakes<TZ: TimeZone>(datetime: DateTime<TZ>) -> i64 {
+    let ts = datetime.with_timezone(&Utc).timestamp() * 1000;
+
+    (ts - 1420070400000i64) << 22
+}
+
 // Is eueoeo by human?
 fn check_message(message: &Message) -> bool {
     !(message.author.bot || message.edited_timestamp.is_some() || message.content != EUEOEO)
@@ -82,6 +90,25 @@ impl<'a> EmbeddableMessage for CreateMessage<'a> {
 
     fn embed<F: FnOnce(&mut CreateEmbed) -> &mut CreateEmbed>(&mut self, f: F) -> &mut Self {
         self.embed(f)
+    }
+}
+
+// statistics obtains counting statistics from the DB and does some shit
+fn create_statistics<'b, M: EmbeddableMessage>(
+    msg: &'b mut M,
+    title: &str,
+    stats: Vec<(String, i64)>,
+) -> &'b mut M {
+    if stats.is_empty() {
+        msg.content("Empty records")
+    } else {
+        msg.embed(move |e| {
+            e.title(title);
+            for stat in stats {
+                e.field(stat.0, stat.1, true);
+            }
+            e
+        })
     }
 }
 
@@ -189,23 +216,105 @@ impl Handler {
             .collect()
     }
 
-    // statistics obtains counting statistics from the DB and does some shit
-    fn create_statistics<'b, M: EmbeddableMessage>(
-        &self,
-        msg: &'b mut M,
-        stats: Vec<(String, i64)>,
-    ) -> &'b mut M {
-        if stats.is_empty() {
-            msg.content("Empty records")
-        } else {
-            msg.embed(move |e| {
-                e.title("Eueoeo records");
-                for stat in stats {
-                    e.field(stat.0, stat.1, true);
-                }
-                e
-            })
+    async fn fetch_yearly_statistics(&self, year: Option<i32>) -> (i32, Vec<(String, i64)>) {
+        let offset = FixedOffset::east(9 * 3600);
+        let year = year.unwrap_or_else(|| chrono::Local::now().year());
+        let begin_date = datetime_to_snowflakes(offset.ymd(year, 1, 1).and_hms(0, 0, 0));
+        let end_date = datetime_to_snowflakes(offset.ymd(year + 1, 1, 1).and_hms(0, 0, 0));
+        info!(
+            "yearly stats {}-01-01({}) ~ {}-01-01({})",
+            year,
+            begin_date,
+            year + 1,
+            end_date
+        );
+
+        let stats = sqlx::query!(
+            r#"SELECT
+                users.name,
+                count(history.message_id) AS "count: i64"
+            FROM
+                history
+            INNER JOIN
+                users ON history.user_id = users.user_id
+            WHERE
+                history.message_id >= ? AND
+                history.message_id < ?
+            GROUP BY
+                history.user_id;
+            "#,
+            begin_date,
+            end_date
+        )
+        .fetch_all(&self.db_pool)
+        .await
+        .unwrap();
+
+        // order by is not works correctly.
+        let mut stats = stats
+            .into_iter()
+            .map(|stat| (stat.name, stat.count.unwrap()))
+            .collect::<Vec<_>>();
+
+        stats.sort_by_cached_key(|i| i.1);
+        stats.reverse();
+
+        (year, stats)
+    }
+
+    async fn fetch_streaks(&self, longest: bool) -> Vec<(String, i64)> {
+        macro_rules! fetch_streaks {
+            ($query:literal) => {{
+                let stats = sqlx::query!($query).fetch_all(&self.db_pool).await.unwrap();
+                stats
+                    .into_iter()
+                    .map(|stat| (stat.name, stat.streaks))
+                    .collect()
+            }};
         }
+
+        if longest {
+            fetch_streaks!(
+                r#"SELECT
+                    name,
+                    longest_streaks as streaks
+                FROM
+                    users
+                ORDER BY
+                    longest_streaks DESC;
+                "#
+            )
+        } else {
+            fetch_streaks!(
+                r#"SELECT
+                    name,
+                    current_streaks as streaks
+                FROM
+                    users
+                ORDER BY
+                    current_streaks DESC;
+                "#
+            )
+        }
+    }
+
+    async fn fetch_streaks_details(&self, user_id: i64) -> (String, i64, i64) {
+        let ret = sqlx::query!(
+            r#"SELECT
+                name,
+                longest_streaks,
+                current_streaks
+            FROM
+                users
+            WHERE
+                user_id = ?"#,
+            user_id
+        )
+        .fetch_one(&self.db_pool)
+        .await
+        .unwrap();
+
+        (ret.name, ret.longest_streaks, ret.current_streaks)
     }
 
     // update_members takes a member list and updates DB with it
@@ -349,13 +458,97 @@ impl EventHandler for Handler {
             .unwrap();
 
         let command = ApplicationCommand {
-            name: COMMAND_NAME.to_string(),
-            description: "show eueoeo stats".to_string(),
-            options: vec![],
+            name: COMMAND_NAME,
+            description: "show eueoeo stats",
+            options: vec![
+                ApplicationCommandOption {
+                    kind: ApplicationCommandOptionType::SubCommand,
+                    name: "year",
+                    description: "yearly count",
+                    required: None,
+                    choices: vec![],
+                    options: vec![ApplicationCommandOption {
+                        kind: ApplicationCommandOptionType::Integer,
+                        name: "yaer",
+                        description: "default is current year.",
+                        required: Some(false),
+                        choices: vec![],
+                        options: vec![],
+                    }],
+                },
+                ApplicationCommandOption {
+                    kind: ApplicationCommandOptionType::SubCommandGroup,
+                    name: "streaks",
+                    description: "streak deatils of specified user or streaks ranking",
+                    required: None,
+                    choices: vec![],
+                    options: vec![
+                        ApplicationCommandOption {
+                            kind: ApplicationCommandOptionType::SubCommand,
+                            name: "ranking",
+                            description: "ranking",
+                            required: None,
+                            choices: vec![],
+                            options: vec![ApplicationCommandOption {
+                                kind: ApplicationCommandOptionType::String,
+                                name: "type",
+                                description: "ranking basis",
+                                required: Some(true),
+                                choices: vec![
+                                    ApplicationCommandOptionChoice {
+                                        name: "current",
+                                        value: serde_json::json!("current"),
+                                    },
+                                    ApplicationCommandOptionChoice {
+                                        name: "longest",
+                                        value: serde_json::json!("longest"),
+                                    },
+                                ],
+                                options: vec![],
+                            }],
+                        },
+                        ApplicationCommandOption {
+                            kind: ApplicationCommandOptionType::SubCommand,
+                            name: "details",
+                            description: "details",
+                            required: None,
+                            choices: vec![],
+                            options: vec![ApplicationCommandOption {
+                                kind: ApplicationCommandOptionType::User,
+                                name: "user",
+                                description: "user",
+                                required: Some(true),
+                                choices: vec![],
+                                options: vec![],
+                            }],
+                        },
+                    ],
+                },
+                ApplicationCommandOption {
+                    kind: ApplicationCommandOptionType::SubCommand,
+                    name: "total",
+                    description: "total ranking",
+                    required: None,
+                    choices: vec![],
+                    options: vec![],
+                },
+            ],
         };
 
-        // TODO: check the command is latest. If not, override it
-        if commands.iter().any(|cmd| PartialEq::eq(&command, &cmd)) {
+        if let Some(cmd) = commands.iter().find(|cmd| cmd.name == command.name) {
+            if PartialEq::ne(&command, cmd) {
+                ctx.http
+                    .edit_guild_application_command(
+                        *self.guild_id.as_u64(),
+                        *cmd.id.as_u64(),
+                        &serde_json::to_value(command).unwrap(),
+                    )
+                    .await
+                    .unwrap();
+            } else {
+                return;
+            }
+        } else {
             ctx.http
                 .create_guild_application_command(
                     *self.guild_id.as_u64(),
@@ -413,15 +606,127 @@ impl EventHandler for Handler {
             return;
         }
 
-        let stats = self.fetch_statistics().await;
-        if let Err(e) = interaction
-            .create_interaction_response(&context.http, |r| {
-                r.kind(InteractionResponseType::ChannelMessageWithSource)
-                    .interaction_response_data(|d| self.create_statistics(d, stats))
-            })
-            .await
-        {
-            error!("Failed to send message: {:?}", e);
+        let option = interaction
+            .data
+            .options
+            .first()
+            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+        match option.name.as_str() {
+            "year" => {
+                let year_arg = option
+                    .options
+                    .first()
+                    .and_then(|opt| {
+                        if let Some(v) = &opt.value {
+                            v.as_u64()
+                        } else {
+                            None
+                        }
+                    })
+                    .map(|v| v as i32);
+                let (year, stats) = self.fetch_yearly_statistics(year_arg).await;
+                if let Err(e) = interaction
+                    .create_interaction_response(&context.http, |r| {
+                        r.kind(InteractionResponseType::ChannelMessageWithSource)
+                            .interaction_response_data(|d| {
+                                create_statistics(d, &format!("으어어 {}", year), stats)
+                            })
+                    })
+                    .await
+                {
+                    error!("Failed to send message: {:?}", e);
+                }
+            }
+            "streaks" => {
+                let sub_command = option
+                    .options
+                    .first()
+                    .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+                match sub_command.name.as_str() {
+                    "ranking" => {
+                        let ranking_basis = sub_command
+                            .options
+                            .first()
+                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+                        let ranking_basis = ranking_basis
+                            .value
+                            .as_ref()
+                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+                        let ranking_basis = ranking_basis
+                            .as_str()
+                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+                        let (stat_name, streak_arg) = match ranking_basis {
+                            "current" => ("현재 연속", false),
+                            "longest" => ("최장 연속", true),
+                            _ => unsafe { std::hint::unreachable_unchecked() },
+                        };
+                        let stats = self.fetch_streaks(streak_arg).await;
+                        if let Err(e) = interaction
+                            .create_interaction_response(&context.http, |r| {
+                                r.kind(InteractionResponseType::ChannelMessageWithSource)
+                                    .interaction_response_data(|d| {
+                                        create_statistics(
+                                            d,
+                                            &format!("{} 으어어", stat_name),
+                                            stats,
+                                        )
+                                    })
+                            })
+                            .await
+                        {
+                            error!("Failed to send message: {:?}", e);
+                        }
+                    }
+                    "details" => {
+                        let user = sub_command
+                            .options
+                            .first()
+                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+                        let user = user
+                            .value
+                            .as_ref()
+                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+                        let user = user
+                            .as_str()
+                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+                        let user: i64 = user
+                            .parse()
+                            .unwrap_or_else(|_| unsafe { std::hint::unreachable_unchecked() });
+                        let (name, longest_streaks, current_streaks) =
+                            self.fetch_streaks_details(user).await;
+
+                        if let Err(e) = interaction
+                            .create_interaction_response(&context.http, |r| {
+                                r.kind(InteractionResponseType::ChannelMessageWithSource)
+                                    .interaction_response_data(|d| {
+                                        d.create_embed(|e| {
+                                            e.title(format!("으어어 by {}", &name))
+                                                .field("최장 연속", longest_streaks, false)
+                                                .field("현재 연속", current_streaks, false)
+                                        })
+                                    })
+                            })
+                            .await
+                        {
+                            error!("Failed to send message: {:?}", e);
+                        }
+                    }
+                    _ => unsafe { std::hint::unreachable_unchecked() },
+                }
+            }
+            "total" => {
+                let stats = self.fetch_statistics().await;
+                if let Err(e) = interaction
+                    .create_interaction_response(&context.http, |r| {
+                        r.kind(InteractionResponseType::ChannelMessageWithSource)
+                            .interaction_response_data(|d| create_statistics(d, "으어어", stats))
+                    })
+                    .await
+                {
+                    error!("Failed to send message: {:?}", e);
+                }
+            }
+            _ => unsafe { std::hint::unreachable_unchecked() },
         }
     }
 }
