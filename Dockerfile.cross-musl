@@ -32,7 +32,7 @@ ENV PKG_CONFIG_ALL_STATIC=1
 RUN sqlx database create && sqlx migrate run
 RUN cargo build --release --target ${BUILD_ARCH}-unknown-linux-musl
 
-FROM scratch
+FROM --platform=$BUILD_ARCH scratch
 
 ARG BUILD_ARCH
 
