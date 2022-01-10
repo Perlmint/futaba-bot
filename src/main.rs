@@ -117,7 +117,8 @@ impl Handler {
         trace!("insert {}", &message.id);
         let message_id = *message.id.as_u64() as i64;
         let author_id = *message.author.id.as_u64() as i64;
-        let message_date = message.timestamp.date();
+        let offset = FixedOffset::east(9 * 3600);
+        let message_date = message.timestamp.with_timezone(&offset).date();
         let prev_date = message_date.pred().and_hms(0, 0, 0).timestamp();
         let message_date = message_date.and_hms(0, 0, 0).timestamp();
         let affected = match sqlx::query!(
