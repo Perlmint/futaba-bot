@@ -23,7 +23,7 @@ RUN cargo build --release
 
 FROM scratch
 
-COPY --from=builder /ws/target/release/eueoeo /
+COPY --from=builder /ws/target/release/futaba /
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-ENTRYPOINT ["/eueoeo"]
+ENTRYPOINT ["/futaba"]

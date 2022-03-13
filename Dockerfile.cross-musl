@@ -36,7 +36,7 @@ FROM --platform=$BUILD_ARCH scratch
 
 ARG BUILD_ARCH
 
-COPY --from=builder /ws/target/${BUILD_ARCH}-unknown-linux-musl/release/eueoeo /
+COPY --from=builder /ws/target/${BUILD_ARCH}-unknown-linux-musl/release/futaba /
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
-ENTRYPOINT ["/eueoeo"]
+ENTRYPOINT ["/futaba"]
