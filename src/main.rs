@@ -1,5 +1,5 @@
 use anyhow::Context as _;
-use chrono::{DateTime, Datelike, FixedOffset, TimeZone, Utc};
+use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Utc};
 use std::{
     ops::Deref,
     sync::atomic::{AtomicU64, Ordering},
@@ -58,6 +58,19 @@ impl<TZ: TimeZone> IntoSnowflakes for DateTime<TZ> {
 
         (ts - 1420070400000i64) << 22
     }
+}
+
+impl IntoSnowflakes for Duration {
+    fn into_snowflakes(self) -> i64 {
+        self.num_milliseconds() << 22
+    }
+}
+
+fn from_snowflakes<TZ: TimeZone>(tz: &TZ, snowflakes: i64) -> chrono::DateTime<TZ> {
+    tz.from_utc_datetime(&chrono::NaiveDateTime::from_timestamp(
+        ((snowflakes >> 22) + 1420070400000i64) / 1000,
+        0,
+    ))
 }
 
 trait FutabaMessage {
@@ -198,6 +211,16 @@ impl<'a> EmbeddableMessage for CreateMessage<'a> {
     }
 }
 
+struct UserDetail {
+    name: String,
+    longest_streaks: i64,
+    current_streaks: i64,
+    year: i32,
+    yearly_count: i64,
+    yearly_ratio: i8,
+    missing_days: Option<Vec<chrono::Date<chrono::FixedOffset>>>,
+}
+
 impl Handler {
     async fn incr_counter(&self, message: &Message) -> anyhow::Result<bool> {
         trace!("insert {}", &message.id);
@@ -303,7 +326,7 @@ impl Handler {
             .collect()
     }
 
-    async fn fetch_yearly_statistics(&self, year: Option<i32>) -> (i32, YearlyStats) {
+    fn get_yearly_stats_range(year: Option<i32>) -> (i32, i64, i64, i64) {
         let offset = FixedOffset::east(9 * 3600);
         let now = chrono::Local::now();
         let current_year = now.year();
@@ -312,16 +335,22 @@ impl Handler {
         let end_date = if year != current_year {
             offset.ymd(year + 1, 1, 1).and_hms(0, 0, 0)
         } else {
-            now.with_timezone(&offset)
+            now.with_timezone(&offset).date().and_hms(0, 0, 0) + chrono::Duration::days(1)
         };
         let days = (end_date - begin_date).num_days();
         let begin_date_snowflakes = begin_date.into_snowflakes();
         let end_date_snowflakes = end_date.into_snowflakes();
         info!(
-            "yearly stats {}-01-01({}) ~ {}({}) ({} days)",
-            year, begin_date_snowflakes, end_date, end_date_snowflakes, days
+            "yearly stats {}({}) ~ {}({}) ({} days)",
+            begin_date, begin_date_snowflakes, end_date, end_date_snowflakes, days
         );
 
+        (year, days, begin_date_snowflakes, end_date_snowflakes)
+    }
+
+    async fn fetch_yearly_statistics(&self, year: Option<i32>) -> (i32, YearlyStats) {
+        let (year, days, begin_date_snowflakes, end_date_snowflakes) =
+            Self::get_yearly_stats_range(year);
         let stats = sqlx::query!(
             r#"SELECT
                 users.name,
@@ -397,7 +426,7 @@ impl Handler {
         }
     }
 
-    async fn fetch_streaks_details(&self, user_id: i64) -> (String, i64, i64) {
+    async fn fetch_user_details(&self, user_id: i64) -> UserDetail {
         let ret = sqlx::query!(
             r#"SELECT
                 name,
@@ -413,7 +442,61 @@ impl Handler {
         .await
         .unwrap();
 
-        (ret.name, ret.longest_streaks, ret.current_streaks)
+        let (year, days, begin_date_snowflakes, end_date_snowflakes) =
+            Self::get_yearly_stats_range(None);
+        let history = sqlx::query!(
+            r#"SELECT
+                history.message_id as message_id
+            FROM
+                history
+            WHERE
+                history.user_id = ? AND
+                history.message_id >= ? AND
+                history.message_id < ?
+            ORDER BY
+                history.message_id ASC;
+            "#,
+            user_id,
+            begin_date_snowflakes,
+            end_date_snowflakes
+        )
+        .fetch_all(&self.db_pool)
+        .await
+        .unwrap();
+        let yearly_count = history.len() as i64;
+
+        let missing_days = if days - yearly_count < 10 {
+            Some({
+                let offset = FixedOffset::east(9 * 3600);
+                let single_day_snowflakes_delta = chrono::Duration::days(1).into_snowflakes();
+                let mut date_cursor_0 = begin_date_snowflakes;
+                let mut date_cursor_1 = date_cursor_0 + single_day_snowflakes_delta;
+                let mut ret = Vec::new();
+                for item in &history {
+                    while item.message_id >= date_cursor_0 {
+                        if item.message_id > date_cursor_1 {
+                            ret.push(from_snowflakes(&offset, date_cursor_0).date());
+                        }
+                        date_cursor_0 = date_cursor_1;
+                        date_cursor_1 += single_day_snowflakes_delta;
+                    }
+                }
+
+                ret
+            })
+        } else {
+            None
+        };
+
+        UserDetail {
+            name: ret.name,
+            longest_streaks: ret.longest_streaks,
+            current_streaks: ret.current_streaks,
+            year,
+            yearly_count,
+            yearly_ratio: (yearly_count * 100 / days) as _,
+            missing_days,
+        }
     }
 
     // update_members takes a member list and updates DB with it
@@ -576,52 +659,43 @@ impl EventHandler for Handler {
                     }],
                 },
                 ApplicationCommandOption {
-                    kind: ApplicationCommandOptionType::SubCommandGroup,
+                    kind: ApplicationCommandOptionType::SubCommand,
                     name: "streaks",
-                    description: "streak deatils of specified user or streaks ranking",
+                    description: "streaks ranking",
                     required: None,
                     choices: vec![],
-                    options: vec![
-                        ApplicationCommandOption {
-                            kind: ApplicationCommandOptionType::SubCommand,
-                            name: "ranking",
-                            description: "ranking",
-                            required: None,
-                            choices: vec![],
-                            options: vec![ApplicationCommandOption {
-                                kind: ApplicationCommandOptionType::String,
-                                name: "type",
-                                description: "ranking basis",
-                                required: Some(true),
-                                choices: vec![
-                                    ApplicationCommandOptionChoice {
-                                        name: "current",
-                                        value: serde_json::json!("current"),
-                                    },
-                                    ApplicationCommandOptionChoice {
-                                        name: "longest",
-                                        value: serde_json::json!("longest"),
-                                    },
-                                ],
-                                options: vec![],
-                            }],
-                        },
-                        ApplicationCommandOption {
-                            kind: ApplicationCommandOptionType::SubCommand,
-                            name: "details",
-                            description: "details",
-                            required: None,
-                            choices: vec![],
-                            options: vec![ApplicationCommandOption {
-                                kind: ApplicationCommandOptionType::User,
-                                name: "user",
-                                description: "user",
-                                required: Some(true),
-                                choices: vec![],
-                                options: vec![],
-                            }],
-                        },
-                    ],
+                    options: vec![ApplicationCommandOption {
+                        kind: ApplicationCommandOptionType::String,
+                        name: "type",
+                        description: "ranking basis",
+                        required: Some(true),
+                        choices: vec![
+                            ApplicationCommandOptionChoice {
+                                name: "current",
+                                value: serde_json::json!("current"),
+                            },
+                            ApplicationCommandOptionChoice {
+                                name: "longest",
+                                value: serde_json::json!("longest"),
+                            },
+                        ],
+                        options: vec![],
+                    }],
+                },
+                ApplicationCommandOption {
+                    kind: ApplicationCommandOptionType::SubCommand,
+                    name: "user",
+                    description: "user detail",
+                    required: None,
+                    choices: vec![],
+                    options: vec![ApplicationCommandOption {
+                        kind: ApplicationCommandOptionType::User,
+                        name: "user",
+                        description: "If not specified, show details of you",
+                        required: Some(false),
+                        choices: vec![],
+                        options: vec![],
+                    }],
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
@@ -737,62 +811,88 @@ impl EventHandler for Handler {
                 }
             }
             "streaks" => {
-                let sub_command = unsafe { option.options.first().unwrap_unchecked() };
-                match sub_command.name.as_str() {
-                    "ranking" => {
-                        let ranking_basis = unsafe {
-                            let ranking_basis = sub_command.options.first().unwrap_unchecked();
-                            let ranking_basis = ranking_basis.value.as_ref().unwrap_unchecked();
-                            ranking_basis.as_str().unwrap_unchecked()
-                        };
-                        let (stat_name, streak_arg) = match ranking_basis {
-                            "current" => ("현재 연속", false),
-                            "longest" => ("최장 연속", true),
-                            _ => unsafe { std::hint::unreachable_unchecked() },
-                        };
-                        let stats = self.fetch_streaks(streak_arg).await;
-                        if let Err(e) = interaction
-                            .create_interaction_response(&context.http, |r| {
-                                r.kind(InteractionResponseType::ChannelMessageWithSource)
-                                    .interaction_response_data(|d| {
-                                        d.create_statistics(
-                                            &format!("{} 으어어", stat_name),
-                                            stats.iter(),
-                                        )
-                                    })
-                            })
-                            .await
-                        {
-                            error!("Failed to send message: {:?}", e);
-                        }
-                    }
-                    "details" => {
-                        let user: i64 = unsafe {
-                            let user = sub_command.options.first().unwrap_unchecked();
-                            let user = user.value.as_ref().unwrap_unchecked();
-                            let user = user.as_str().unwrap_unchecked();
-                            user.parse().unwrap_unchecked()
-                        };
-                        let (name, longest_streaks, current_streaks) =
-                            self.fetch_streaks_details(user).await;
-
-                        if let Err(e) = interaction
-                            .create_interaction_response(&context.http, |r| {
-                                r.kind(InteractionResponseType::ChannelMessageWithSource)
-                                    .interaction_response_data(|d| {
-                                        d.create_embed(|e| {
-                                            e.title(format!("으어어 by {}", &name))
-                                                .field("최장 연속", longest_streaks, false)
-                                                .field("현재 연속", current_streaks, false)
-                                        })
-                                    })
-                            })
-                            .await
-                        {
-                            error!("Failed to send message: {:?}", e);
-                        }
-                    }
+                let ranking_basis = unsafe {
+                    let ranking_basis = option.options.first().unwrap_unchecked();
+                    let ranking_basis = ranking_basis.value.as_ref().unwrap_unchecked();
+                    ranking_basis.as_str().unwrap_unchecked()
+                };
+                let (stat_name, streak_arg) = match ranking_basis {
+                    "current" => ("현재 연속", false),
+                    "longest" => ("최장 연속", true),
                     _ => unsafe { std::hint::unreachable_unchecked() },
+                };
+                let stats = self.fetch_streaks(streak_arg).await;
+                if let Err(e) = interaction
+                    .create_interaction_response(&context.http, |r| {
+                        r.kind(InteractionResponseType::ChannelMessageWithSource)
+                            .interaction_response_data(|d| {
+                                d.create_statistics(&format!("{} 으어어", stat_name), stats.iter())
+                            })
+                    })
+                    .await
+                {
+                    error!("Failed to send message: {:?}", e);
+                }
+            }
+            "user" => {
+                let user_id: i64 = unsafe {
+                    if let Some(user) = option.options.first() {
+                        let user = user.value.as_ref().unwrap_unchecked();
+                        let user = user.as_str().unwrap_unchecked();
+                        user.parse().unwrap_unchecked()
+                    } else {
+                        *interaction
+                            .member
+                            .as_ref()
+                            .unwrap_unchecked()
+                            .user
+                            .id
+                            .as_u64() as _
+                    }
+                };
+                let user_detail = self.fetch_user_details(user_id).await;
+
+                if let Err(e) = interaction
+                    .create_interaction_response(&context.http, |r| {
+                        r.kind(InteractionResponseType::ChannelMessageWithSource)
+                            .interaction_response_data(|d| {
+                                d.create_embed(|e| {
+                                    e.title(format!("으어어 by {}", &user_detail.name))
+                                        .field("최장 연속", user_detail.longest_streaks, false)
+                                        .field("현재 연속", user_detail.current_streaks, false)
+                                        .field(
+                                            format!("{}년", user_detail.year),
+                                            format!(
+                                                "{} ({}%)",
+                                                user_detail.yearly_count, user_detail.yearly_ratio
+                                            ),
+                                            false,
+                                        )
+                                        .field(
+                                            "빼먹은 날",
+                                            if let Some(missing_days) = user_detail.missing_days {
+                                                if missing_days.is_empty() {
+                                                    "없음".to_string()
+                                                } else {
+                                                    missing_days
+                                                        .iter()
+                                                        .map(|date| {
+                                                            date.format("%m/%d").to_string()
+                                                        })
+                                                        .collect::<Vec<_>>()
+                                                        .join(", ")
+                                                }
+                                            } else {
+                                                "많음".to_string()
+                                            },
+                                            false,
+                                        )
+                                })
+                            })
+                    })
+                    .await
+                {
+                    error!("Failed to send message: {:?}", e);
                 }
             }
             "total" => {
