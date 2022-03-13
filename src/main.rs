@@ -705,11 +705,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let option = interaction
-            .data
-            .options
-            .first()
-            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+        let option = unsafe { interaction.data.options.first().unwrap_unchecked() };
         match option.name.as_str() {
             "year" => {
                 let year_arg = option
@@ -741,23 +737,14 @@ impl EventHandler for Handler {
                 }
             }
             "streaks" => {
-                let sub_command = option
-                    .options
-                    .first()
-                    .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+                let sub_command = unsafe { option.options.first().unwrap_unchecked() };
                 match sub_command.name.as_str() {
                     "ranking" => {
-                        let ranking_basis = sub_command
-                            .options
-                            .first()
-                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
-                        let ranking_basis = ranking_basis
-                            .value
-                            .as_ref()
-                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
-                        let ranking_basis = ranking_basis
-                            .as_str()
-                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
+                        let ranking_basis = unsafe {
+                            let ranking_basis = sub_command.options.first().unwrap_unchecked();
+                            let ranking_basis = ranking_basis.value.as_ref().unwrap_unchecked();
+                            ranking_basis.as_str().unwrap_unchecked()
+                        };
                         let (stat_name, streak_arg) = match ranking_basis {
                             "current" => ("현재 연속", false),
                             "longest" => ("최장 연속", true),
@@ -780,20 +767,12 @@ impl EventHandler for Handler {
                         }
                     }
                     "details" => {
-                        let user = sub_command
-                            .options
-                            .first()
-                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
-                        let user = user
-                            .value
-                            .as_ref()
-                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
-                        let user = user
-                            .as_str()
-                            .unwrap_or_else(|| unsafe { std::hint::unreachable_unchecked() });
-                        let user: i64 = user
-                            .parse()
-                            .unwrap_or_else(|_| unsafe { std::hint::unreachable_unchecked() });
+                        let user: i64 = unsafe {
+                            let user = sub_command.options.first().unwrap_unchecked();
+                            let user = user.value.as_ref().unwrap_unchecked();
+                            let user = user.as_str().unwrap_unchecked();
+                            user.parse().unwrap_unchecked()
+                        };
                         let (name, longest_streaks, current_streaks) =
                             self.fetch_streaks_details(user).await;
 
