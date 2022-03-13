@@ -732,6 +732,12 @@ impl EventHandler for Handler {
         }
     }
 
+    async fn guild_member_addition(&self, _: Context, _: GuildId, new_member: Member) -> () {
+        self.update_members([new_member])
+            .await
+            .expect("Failed to update member");
+    }
+
     // run on any message event
     async fn message(&self, _: Context, message: Message) {
         if message
