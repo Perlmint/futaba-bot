@@ -47,22 +47,72 @@ struct Handler {
     channel_id: ChannelId,
 }
 
-// See https://discord.com/developers/docs/reference#snowflakes
-fn datetime_to_snowflakes<TZ: TimeZone>(datetime: DateTime<TZ>) -> i64 {
-    let ts = datetime.with_timezone(&Utc).timestamp() * 1000;
-
-    (ts - 1420070400000i64) << 22
+trait IntoSnowflakes {
+    fn into_snowflakes(self) -> i64;
 }
 
-// Is eueoeo by human?
-fn check_message(message: &Message) -> bool {
-    !(message.author.bot || message.edited_timestamp.is_some() || message.content != EUEOEO)
+impl<TZ: TimeZone> IntoSnowflakes for DateTime<TZ> {
+    // See https://discord.com/developers/docs/reference#snowflakes
+    fn into_snowflakes(self) -> i64 {
+        let ts = self.with_timezone(&Utc).timestamp() * 1000;
+
+        (ts - 1420070400000i64) << 22
+    }
+}
+
+trait FutabaMessage {
+    fn check_message(&self) -> bool;
+}
+
+impl FutabaMessage for Message {
+    // Is eueoeo by human?
+    fn check_message(&self) -> bool {
+        !(self.author.bot || self.edited_timestamp.is_some() || self.content != EUEOEO)
+    }
+}
+
+trait Stat {
+    fn title(&self) -> &str;
+    fn value(&self) -> String;
+
+    fn insert_as_field<'a>(&self, e: &'a mut CreateEmbed) {
+        e.field(self.title(), self.value(), true);
+    }
+}
+
+impl Stat for &(String, i64) {
+    fn title(&self) -> &str {
+        &self.0
+    }
+
+    fn value(&self) -> String {
+        self.1.to_string()
+    }
 }
 
 // common interface for message
 trait EmbeddableMessage {
     fn content<D: ToString>(&mut self, content: D) -> &mut Self;
     fn embed<F: FnOnce(&mut CreateEmbed) -> &mut CreateEmbed>(&mut self, f: F) -> &mut Self;
+
+    // statistics obtains counting statistics from the DB and does some shit
+    fn create_statistics<'a, S: Stat, I: ExactSizeIterator<Item = S>>(
+        &'a mut self,
+        title: &str,
+        stats: I,
+    ) -> &'a mut Self {
+        if stats.len() == 0 {
+            self.content("Empty records")
+        } else {
+            self.embed(move |e| {
+                e.title(title);
+                for stat in stats {
+                    stat.insert_as_field(e);
+                }
+                e
+            })
+        }
+    }
 }
 
 impl EmbeddableMessage for CreateInteractionResponseData {
@@ -90,25 +140,6 @@ impl<'a> EmbeddableMessage for CreateMessage<'a> {
 
     fn embed<F: FnOnce(&mut CreateEmbed) -> &mut CreateEmbed>(&mut self, f: F) -> &mut Self {
         self.embed(f)
-    }
-}
-
-// statistics obtains counting statistics from the DB and does some shit
-fn create_statistics<'b, M: EmbeddableMessage>(
-    msg: &'b mut M,
-    title: &str,
-    stats: Vec<(String, i64)>,
-) -> &'b mut M {
-    if stats.is_empty() {
-        msg.content("Empty records")
-    } else {
-        msg.embed(move |e| {
-            e.title(title);
-            for stat in stats {
-                e.field(stat.0, stat.1, true);
-            }
-            e
-        })
     }
 }
 
@@ -220,8 +251,11 @@ impl Handler {
     async fn fetch_yearly_statistics(&self, year: Option<i32>) -> (i32, Vec<(String, i64)>) {
         let offset = FixedOffset::east(9 * 3600);
         let year = year.unwrap_or_else(|| chrono::Local::now().year());
-        let begin_date = datetime_to_snowflakes(offset.ymd(year, 1, 1).and_hms(0, 0, 0));
-        let end_date = datetime_to_snowflakes(offset.ymd(year + 1, 1, 1).and_hms(0, 0, 0));
+        let begin_date = offset.ymd(year, 1, 1).and_hms(0, 0, 0).into_snowflakes();
+        let end_date = offset
+            .ymd(year + 1, 1, 1)
+            .and_hms(0, 0, 0)
+            .into_snowflakes();
         info!(
             "yearly stats {}-01-01({}) ~ {}-01-01({})",
             year,
@@ -361,7 +395,7 @@ impl Handler {
         let queries = (&messages).iter().filter_map(|message| {
             most_new_id = std::cmp::max(most_new_id, *message.id.as_u64());
 
-            if check_message(message) {
+            if message.check_message() {
                 Some(self.incr_counter(message))
             } else {
                 None
@@ -576,7 +610,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        if !check_message(&message) {
+        if !message.check_message() {
             return;
         }
 
@@ -630,7 +664,7 @@ impl EventHandler for Handler {
                     .create_interaction_response(&context.http, |r| {
                         r.kind(InteractionResponseType::ChannelMessageWithSource)
                             .interaction_response_data(|d| {
-                                create_statistics(d, &format!("으어어 {}", year), stats)
+                                d.create_statistics(&format!("으어어 {}", year), stats.iter())
                             })
                     })
                     .await
@@ -666,10 +700,9 @@ impl EventHandler for Handler {
                             .create_interaction_response(&context.http, |r| {
                                 r.kind(InteractionResponseType::ChannelMessageWithSource)
                                     .interaction_response_data(|d| {
-                                        create_statistics(
-                                            d,
+                                        d.create_statistics(
                                             &format!("{} 으어어", stat_name),
-                                            stats,
+                                            stats.iter(),
                                         )
                                     })
                             })
@@ -720,7 +753,9 @@ impl EventHandler for Handler {
                 if let Err(e) = interaction
                     .create_interaction_response(&context.http, |r| {
                         r.kind(InteractionResponseType::ChannelMessageWithSource)
-                            .interaction_response_data(|d| create_statistics(d, "으어어", stats))
+                            .interaction_response_data(|d| {
+                                d.create_statistics("으어어", stats.iter())
+                            })
                     })
                     .await
                 {
