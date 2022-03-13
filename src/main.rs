@@ -88,7 +88,7 @@ trait Stat {
     fn title(&self) -> &str;
     fn value(&self) -> String;
 
-    fn insert_as_field<'a>(&self, e: &'a mut CreateEmbed) {
+    fn insert_as_field(&self, e: &mut CreateEmbed) {
         e.field(self.title(), self.value(), true);
     }
 }
@@ -109,9 +109,9 @@ struct YearlyStats {
 }
 
 impl YearlyStats {
-    fn iter<'a>(&'a self) -> YearlyStatIterator<'a> {
+    fn iter(&self) -> YearlyStatIterator<'_> {
         YearlyStatIterator {
-            stats: &self,
+            stats: self,
             iter: self.stats.iter(),
         }
     }
@@ -142,12 +142,10 @@ impl<'a> Iterator for YearlyStatIterator<'a> {
     type Item = YearlyStat<'a>;
 
     fn next(&mut self) -> Option<Self::Item> {
-        self.iter.next().and_then(|i| {
-            Some(YearlyStat {
-                name: &i.0,
-                total_days: self.stats.total_days,
-                count: i.1,
-            })
+        self.iter.next().map(|i| YearlyStat {
+            name: &i.0,
+            total_days: self.stats.total_days,
+            count: i.1,
         })
     }
 }
@@ -508,8 +506,8 @@ impl Handler {
         let mut largest_user_id: Option<UserId> = None;
         for member in iter {
             let user_id = *member.user.id.as_u64() as i64;
-            if largest_user_id.unwrap_or(0.into()) < member.user.id {
-                largest_user_id = Some(member.user.id.clone());
+            if largest_user_id.unwrap_or_else(|| 0.into()) < member.user.id {
+                largest_user_id = Some(member.user.id);
             }
 
             // if there is no nickname, use member's name
@@ -539,7 +537,7 @@ impl Handler {
         messages: &[Message],
     ) -> anyhow::Result<Option<MessageId>> {
         let mut most_new_id = 0;
-        let queries = (&messages).iter().filter_map(|message| {
+        let queries = messages.iter().filter_map(|message| {
             most_new_id = std::cmp::max(most_new_id, *message.id.as_u64());
 
             if message.check_message() {
@@ -718,8 +716,6 @@ impl EventHandler for Handler {
                     )
                     .await
                     .unwrap();
-            } else {
-                return;
             }
         } else {
             ctx.http
@@ -732,7 +728,7 @@ impl EventHandler for Handler {
         }
     }
 
-    async fn guild_member_addition(&self, _: Context, _: GuildId, new_member: Member) -> () {
+    async fn guild_member_addition(&self, _: Context, _: GuildId, new_member: Member) {
         self.update_members([new_member])
             .await
             .expect("Failed to update member");
