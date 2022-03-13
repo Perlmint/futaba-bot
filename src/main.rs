@@ -90,6 +90,61 @@ impl Stat for &(String, i64) {
     }
 }
 
+struct YearlyStats {
+    stats: Vec<(String, i64)>,
+    total_days: i64,
+}
+
+impl YearlyStats {
+    fn iter<'a>(&'a self) -> YearlyStatIterator<'a> {
+        YearlyStatIterator {
+            stats: &self,
+            iter: self.stats.iter(),
+        }
+    }
+}
+
+struct YearlyStatIterator<'a> {
+    stats: &'a YearlyStats,
+    iter: std::slice::Iter<'a, (String, i64)>,
+}
+
+struct YearlyStat<'a> {
+    name: &'a str,
+    total_days: i64,
+    count: i64,
+}
+
+impl<'a> Stat for YearlyStat<'a> {
+    fn title(&self) -> &str {
+        self.name
+    }
+
+    fn value(&self) -> String {
+        format!("{} ({}%)", self.count, self.count * 100 / self.total_days)
+    }
+}
+
+impl<'a> Iterator for YearlyStatIterator<'a> {
+    type Item = YearlyStat<'a>;
+
+    fn next(&mut self) -> Option<Self::Item> {
+        self.iter.next().and_then(|i| {
+            Some(YearlyStat {
+                name: &i.0,
+                total_days: self.stats.total_days,
+                count: i.1,
+            })
+        })
+    }
+}
+
+impl<'a> ExactSizeIterator for YearlyStatIterator<'a> {
+    fn len(&self) -> usize {
+        self.stats.stats.len()
+    }
+}
+
 // common interface for message
 trait EmbeddableMessage {
     fn content<D: ToString>(&mut self, content: D) -> &mut Self;
@@ -248,20 +303,23 @@ impl Handler {
             .collect()
     }
 
-    async fn fetch_yearly_statistics(&self, year: Option<i32>) -> (i32, Vec<(String, i64)>) {
+    async fn fetch_yearly_statistics(&self, year: Option<i32>) -> (i32, YearlyStats) {
         let offset = FixedOffset::east(9 * 3600);
-        let year = year.unwrap_or_else(|| chrono::Local::now().year());
-        let begin_date = offset.ymd(year, 1, 1).and_hms(0, 0, 0).into_snowflakes();
-        let end_date = offset
-            .ymd(year + 1, 1, 1)
-            .and_hms(0, 0, 0)
-            .into_snowflakes();
+        let now = chrono::Local::now();
+        let current_year = now.year();
+        let year = year.unwrap_or(current_year);
+        let begin_date = offset.ymd(year, 1, 1).and_hms(0, 0, 0);
+        let end_date = if year != current_year {
+            offset.ymd(year + 1, 1, 1).and_hms(0, 0, 0)
+        } else {
+            now.with_timezone(&offset)
+        };
+        let days = (end_date - begin_date).num_days();
+        let begin_date_snowflakes = begin_date.into_snowflakes();
+        let end_date_snowflakes = end_date.into_snowflakes();
         info!(
-            "yearly stats {}-01-01({}) ~ {}-01-01({})",
-            year,
-            begin_date,
-            year + 1,
-            end_date
+            "yearly stats {}-01-01({}) ~ {}({}) ({} days)",
+            year, begin_date_snowflakes, end_date, end_date_snowflakes, days
         );
 
         let stats = sqlx::query!(
@@ -278,8 +336,8 @@ impl Handler {
             GROUP BY
                 history.user_id;
             "#,
-            begin_date,
-            end_date
+            begin_date_snowflakes,
+            end_date_snowflakes
         )
         .fetch_all(&self.db_pool)
         .await
@@ -294,7 +352,13 @@ impl Handler {
         stats.sort_by_cached_key(|i| i.1);
         stats.reverse();
 
-        (year, stats)
+        (
+            year,
+            YearlyStats {
+                stats,
+                total_days: days,
+            },
+        )
     }
 
     async fn fetch_streaks(&self, longest: bool) -> Vec<(String, i64)> {
@@ -664,7 +728,11 @@ impl EventHandler for Handler {
                     .create_interaction_response(&context.http, |r| {
                         r.kind(InteractionResponseType::ChannelMessageWithSource)
                             .interaction_response_data(|d| {
-                                d.create_statistics(&format!("으어어 {}", year), stats.iter())
+                                let stat_iter = stats.iter();
+                                d.create_statistics(
+                                    &format!("으어어 {} ({}일)", year, stats.total_days),
+                                    stat_iter,
+                                )
                             })
                     })
                     .await
