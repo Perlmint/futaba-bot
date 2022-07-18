@@ -216,6 +216,7 @@ struct UserDetail {
     year: i32,
     yearly_count: i64,
     yearly_ratio: i8,
+    total_count: i64,
     missing_days: Option<Vec<chrono::Date<chrono::FixedOffset>>>,
 }
 
@@ -486,6 +487,22 @@ impl Handler {
             None
         };
 
+        let total_count = sqlx::query!(
+            r#"
+            SELECT
+                count(*) AS "count: i64"
+            FROM
+                history
+            WHERE
+                history.user_id = ?
+        "#,
+            user_id
+        )
+        .fetch_one(&self.db_pool)
+        .await
+        .unwrap()
+        .count;
+
         UserDetail {
             name: ret.name,
             longest_streaks: ret.longest_streaks,
@@ -493,6 +510,7 @@ impl Handler {
             year,
             yearly_count,
             yearly_ratio: (yearly_count * 100 / days) as _,
+            total_count,
             missing_days,
         }
     }
@@ -852,6 +870,17 @@ impl EventHandler for Handler {
                             .as_u64() as _
                     }
                 };
+
+                let user_joined_at = {
+                    let ret = context
+                        .cache
+                        .member(self.guild_id, UserId(user_id as u64))
+                        .await;
+                    unsafe { ret.unwrap_unchecked().joined_at.unwrap_unchecked() }
+                }
+                .date();
+                let user_joined_at = chrono::Local.from_utc_date(&user_joined_at.naive_utc());
+                let total_days = (chrono::Local::today() - user_joined_at).num_days();
                 let user_detail = self.fetch_user_details(user_id).await;
 
                 if let Err(e) = interaction
@@ -867,6 +896,16 @@ impl EventHandler for Handler {
                                             format!(
                                                 "{} ({}%)",
                                                 user_detail.yearly_count, user_detail.yearly_ratio
+                                            ),
+                                            false,
+                                        )
+                                        .field(
+                                            "가입 후",
+                                            format!(
+                                                "{}/{} ({}%)",
+                                                user_detail.total_count,
+                                                total_days,
+                                                (user_detail.total_count * 100) / total_days
                                             ),
                                             false,
                                         )
