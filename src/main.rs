@@ -324,8 +324,12 @@ impl Handler {
             .collect()
     }
 
+    fn basis_offset() -> FixedOffset {
+        FixedOffset::east(9 * 3600)
+    }
+
     fn get_yearly_stats_range(year: Option<i32>) -> (i32, i64, i64, i64) {
-        let offset = FixedOffset::east(9 * 3600);
+        let offset = Self::basis_offset();
         let now = chrono::Local::now();
         let current_year = now.year();
         let year = year.unwrap_or(current_year);
@@ -344,6 +348,18 @@ impl Handler {
         );
 
         (year, days, begin_date_snowflakes, end_date_snowflakes)
+    }
+
+    fn get_current_streak_range() -> (i64, i64) {
+        let offset = FixedOffset::east(9 * 3600);
+        let now = chrono::Local::now().with_timezone(&offset).date();
+        let begin = now.pred();
+        let end = now.succ();
+        info!("current streak range at {}: {} ~ {}", now, begin, end);
+        (
+            begin.and_hms(0, 0, 0).timestamp(),
+            end.and_hms(0, 0, 0).timestamp(),
+        )
     }
 
     async fn fetch_yearly_statistics(&self, year: Option<i32>) -> (i32, YearlyStats) {
@@ -390,8 +406,11 @@ impl Handler {
 
     async fn fetch_streaks(&self, longest: bool) -> Vec<(String, i64)> {
         macro_rules! fetch_streaks {
-            ($query:literal) => {{
-                let stats = sqlx::query!($query).fetch_all(&self.db_pool).await.unwrap();
+            ($query:expr) => {
+                fetch_streaks!($query,)
+            };
+            ($query:expr, $($args:tt)*) => {{
+                let stats = sqlx::query!($query, $($args)*).fetch_all(&self.db_pool).await.unwrap();
                 stats
                     .into_iter()
                     .map(|stat| (stat.name, stat.streaks))
@@ -411,15 +430,20 @@ impl Handler {
                 "#
             )
         } else {
+            let (begin, end) = Self::get_current_streak_range();
             fetch_streaks!(
                 r#"SELECT
                     name,
                     current_streaks as streaks
                 FROM
                     users
+                WHERE
+                    last_date >= ? AND last_date < ?
                 ORDER BY
                     current_streaks DESC;
-                "#
+                "#,
+                begin,
+                end
             )
         }
     }
