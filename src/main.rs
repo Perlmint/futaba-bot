@@ -622,7 +622,7 @@ impl EventHandler for Handler {
                 }
             }
 
-            let _ = self.update_last_id(&last_message_id).await;
+            self.update_last_id(&last_message_id).await;
         }
 
         info!("Ready!");
@@ -744,7 +744,7 @@ impl EventHandler for Handler {
             return;
         }
 
-        let _ = self.update_last_id(&message.id).await;
+        self.update_last_id(&message.id).await;
 
         if message.channel_id != self.channel_id {
             return;
