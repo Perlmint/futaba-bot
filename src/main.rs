@@ -11,10 +11,11 @@ use serenity::{
     builder::{CreateEmbed, CreateInteractionResponseData, CreateMessage},
     client::{Context, EventHandler},
     model::{
+        application::interaction::{Interaction, InteractionResponseType, InteractionType},
         channel::Message,
+        gateway::GatewayIntents,
         guild::Member,
         id::{ChannelId, GuildId, MessageId, UserId},
-        interactions::{Interaction, InteractionResponseType, InteractionType},
         prelude::Ready,
     },
     Client,
@@ -181,7 +182,7 @@ trait EmbeddableMessage {
     }
 }
 
-impl EmbeddableMessage for CreateInteractionResponseData {
+impl<'a> EmbeddableMessage for CreateInteractionResponseData<'a> {
     fn content<D: ToString>(&mut self, content: D) -> &mut Self {
         self.content(content)
     }
@@ -190,7 +191,7 @@ impl EmbeddableMessage for CreateInteractionResponseData {
         // workaround. It would be fixed after 0.10.5
         let mut embed = CreateEmbed::default();
         f(&mut embed);
-        let map = serenity::utils::hashmap_to_json_map(embed.0);
+        let map = serenity::json::hashmap_to_json_map(embed.0);
         let embed = serde_json::Value::Array(vec![serde_json::Value::Object(map)]);
 
         self.0.insert("embeds", embed);
@@ -216,6 +217,7 @@ struct UserDetail {
     year: i32,
     yearly_count: i64,
     yearly_ratio: i8,
+    total_count: i64,
     missing_days: Option<Vec<chrono::Date<chrono::FixedOffset>>>,
 }
 
@@ -510,6 +512,22 @@ impl Handler {
             None
         };
 
+        let total_count = sqlx::query!(
+            r#"
+            SELECT
+                count(*) AS "count: i64"
+            FROM
+                history
+            WHERE
+                history.user_id = ?
+        "#,
+            user_id
+        )
+        .fetch_one(&self.db_pool)
+        .await
+        .unwrap()
+        .count;
+
         UserDetail {
             name: ret.name,
             longest_streaks: ret.longest_streaks,
@@ -517,6 +535,7 @@ impl Handler {
             year,
             yearly_count,
             yearly_ratio: (yearly_count * 100 / days) as _,
+            total_count,
             missing_days,
         }
     }
@@ -590,12 +609,10 @@ impl EventHandler for Handler {
         let channel = context
             .cache
             .guild_channel(self.channel_id)
-            .await
             .expect("Specified channel name is not found");
         let guild = context
             .cache
             .guild(self.guild_id)
-            .await
             .expect("Specified guild is not found");
         {
             let mut user_id = None;
@@ -655,12 +672,6 @@ impl EventHandler for Handler {
     // on connected to discord
     async fn ready(&self, ctx: Context, _data_about_bot: Ready) {
         // register or update slash command
-        let commands = ctx
-            .http
-            .get_guild_application_commands(*self.guild_id.as_u64())
-            .await
-            .unwrap();
-
         let command = ApplicationCommand {
             name: COMMAND_NAME,
             description: "show eueoeo stats",
@@ -730,29 +741,18 @@ impl EventHandler for Handler {
             ],
         };
 
-        if let Some(cmd) = commands.iter().find(|cmd| cmd.name == command.name) {
-            if PartialEq::ne(&command, cmd) {
-                ctx.http
-                    .edit_guild_application_command(
-                        *self.guild_id.as_u64(),
-                        *cmd.id.as_u64(),
-                        &serde_json::to_value(command).unwrap(),
-                    )
-                    .await
-                    .unwrap();
-            }
-        } else {
-            ctx.http
-                .create_guild_application_command(
-                    *self.guild_id.as_u64(),
-                    &serde_json::to_value(command).unwrap(),
-                )
-                .await
-                .unwrap();
-        }
+        info!("ready");
+
+        ctx.http
+            .create_guild_application_command(
+                *self.guild_id.as_u64(),
+                &serde_json::to_value(command).unwrap(),
+            )
+            .await
+            .unwrap();
     }
 
-    async fn guild_member_addition(&self, _: Context, _: GuildId, new_member: Member) {
+    async fn guild_member_addition(&self, _: Context, new_member: Member) {
         self.update_members([new_member])
             .await
             .expect("Failed to update member");
@@ -876,13 +876,22 @@ impl EventHandler for Handler {
                             .as_u64() as _
                     }
                 };
+
+                let user_joined_at = {
+                    let member = context.cache.member(self.guild_id, user_id as u64);
+                    let member = unsafe { member.unwrap_unchecked() };
+                    unsafe { member.joined_at.unwrap_unchecked() }
+                }
+                .date();
+                let user_joined_at = chrono::Local.from_utc_date(&user_joined_at.naive_utc());
+                let total_days = (chrono::Local::today() - user_joined_at).num_days();
                 let user_detail = self.fetch_user_details(user_id).await;
 
                 if let Err(e) = interaction
                     .create_interaction_response(&context.http, |r| {
                         r.kind(InteractionResponseType::ChannelMessageWithSource)
                             .interaction_response_data(|d| {
-                                d.create_embed(|e| {
+                                d.embed(|e| {
                                     e.title(format!("으어어 by {}", &user_detail.name))
                                         .field("최장 연속", user_detail.longest_streaks, false)
                                         .field("현재 연속", user_detail.current_streaks, false)
@@ -891,6 +900,16 @@ impl EventHandler for Handler {
                                             format!(
                                                 "{} ({}%)",
                                                 user_detail.yearly_count, user_detail.yearly_ratio
+                                            ),
+                                            false,
+                                        )
+                                        .field(
+                                            "가입 후",
+                                            format!(
+                                                "{}/{} ({}%)",
+                                                user_detail.total_count,
+                                                total_days,
+                                                (user_detail.total_count * 100) / total_days
                                             ),
                                             false,
                                         )
@@ -987,16 +1006,22 @@ async fn main() -> anyhow::Result<()> {
     );
 
     // prepare serenity(discord api framework)
-    let mut client = Client::builder(&token)
-        .application_id(application_id)
-        .event_handler(Handler {
-            db_pool,
-            guild_id: GuildId(guild_id),
-            channel_id: ChannelId(channel_id),
+    let mut client = Client::builder(
+        &token,
+        GatewayIntents::GUILDS
+            | GatewayIntents::GUILD_MEMBERS
+            | GatewayIntents::GUILD_MESSAGES
+            | GatewayIntents::GUILD_PRESENCES,
+    )
+    .application_id(application_id)
+    .event_handler(Handler {
+        db_pool,
+        guild_id: GuildId(guild_id),
+        channel_id: ChannelId(channel_id),
 
-            last_message_id,
-        })
-        .await?;
+        last_message_id,
+    })
+    .await?;
 
     let shard_manager = client.shard_manager.clone();
 
