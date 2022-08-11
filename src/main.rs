@@ -16,7 +16,7 @@ use serenity::{
         gateway::GatewayIntents,
         guild::Member,
         id::{ChannelId, GuildId, MessageId, UserId},
-        prelude::Ready,
+        prelude::{Ready, ResumedEvent},
     },
     Client,
 };
@@ -599,38 +599,13 @@ impl Handler {
             Some(most_new_id.into())
         })
     }
-}
 
-#[async_trait]
-impl EventHandler for Handler {
-    // on connected to discord and cache system is ready
-    // note: serenity makes a caching system for discord API to store discord information (i.e. member, channel info)
-    async fn cache_ready(&self, context: Context, _: Vec<GuildId>) {
+    async fn retreive_missing_messages(&self, context: Context) {
+        info!("try retreive missing message");
         let channel = context
             .cache
             .guild_channel(self.channel_id)
             .expect("Specified channel name is not found");
-        let guild = context
-            .cache
-            .guild(self.guild_id)
-            .expect("Specified guild is not found");
-        {
-            let mut user_id = None;
-            loop {
-                let members = guild
-                    .members(&context.http, None, user_id)
-                    .await
-                    .expect("Failed to retrieve member info");
-                let id = self
-                    .update_members(members)
-                    .await
-                    .expect("Failed to update member");
-                if id.is_none() {
-                    break;
-                }
-                user_id = id;
-            }
-        }
 
         // When channel has any message
         // crawl all messages
@@ -640,7 +615,7 @@ impl EventHandler for Handler {
                 self.last_message_id
                     .swap(*last_message_id.as_u64(), Ordering::AcqRel),
             );
-            debug!("current last message id is {}", last_message_id);
+            info!("current last message id is {}", last_message_id);
 
             while prev_message_id < last_message_id {
                 debug!("get history after {}", prev_message_id);
@@ -664,9 +639,45 @@ impl EventHandler for Handler {
             }
 
             self.update_last_id(&last_message_id).await;
+            info!("last message id is {}", last_message_id);
+        }
+    }
+}
+
+#[async_trait]
+impl EventHandler for Handler {
+    // on connected to discord and cache system is ready
+    // note: serenity makes a caching system for discord API to store discord information (i.e. member, channel info)
+    async fn cache_ready(&self, context: Context, _: Vec<GuildId>) {
+        let guild = context
+            .cache
+            .guild(self.guild_id)
+            .expect("Specified guild is not found");
+        {
+            let mut user_id = None;
+            loop {
+                let members = guild
+                    .members(&context.http, None, user_id)
+                    .await
+                    .expect("Failed to retrieve member info");
+                let id = self
+                    .update_members(members)
+                    .await
+                    .expect("Failed to update member");
+                if id.is_none() {
+                    break;
+                }
+                user_id = id;
+            }
         }
 
+        self.retreive_missing_messages(context).await;
+
         info!("Ready!");
+    }
+
+    async fn resume(&self, context: Context, _: ResumedEvent) {
+        self.retreive_missing_messages(context).await;
     }
 
     // on connected to discord
