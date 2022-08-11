@@ -6,7 +6,7 @@ use std::{
 };
 
 use async_trait::async_trait;
-use log::{debug, error, info, trace};
+use log::{error, info, trace};
 use serenity::{
     builder::{CreateEmbed, CreateInteractionResponseData, CreateMessage},
     client::{Context, EventHandler},
@@ -618,7 +618,7 @@ impl Handler {
             info!("current last message id is {}", last_message_id);
 
             while prev_message_id < last_message_id {
-                debug!("get history after {}", prev_message_id);
+                info!("get history after {}", prev_message_id);
                 let mut messages = channel
                     .messages(context.http.as_ref(), |req| {
                         req.after(prev_message_id).limit(MESSAGES_LIMIT)
@@ -1004,16 +1004,22 @@ async fn main() -> anyhow::Result<()> {
         {
             Ok(row) => {
                 let last_id = row.message_id as u64;
-                debug!("Previous last_message_id = {}", last_id);
+                info!("Previous last_message_id from db = {}", last_id);
                 last_id.into()
             }
-            Err(_) => {
+            Err(e) => {
+                info!("Failed to get last_id from db - {:?}", e);
+                info!("Use last id from env config");
                 let id: u64 = std::env::var("INIT_MESSAGE_ID")
                     .context("INIT_MESSAGE_ID")?
                     .parse()?;
                 id.into()
             }
         },
+    );
+    info!(
+        "Previous last_message_id = {}",
+        last_message_id.0.load(Ordering::SeqCst)
     );
 
     // prepare serenity(discord api framework)
