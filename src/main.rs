@@ -1037,7 +1037,7 @@ async fn main() -> anyhow::Result<()> {
     )
     .application_id(application_id)
     .event_handler(Handler {
-        db_pool,
+        db_pool: db_pool.clone(),
         guild_id: GuildId(guild_id),
         channel_id: ChannelId(channel_id),
 
@@ -1053,10 +1053,15 @@ async fn main() -> anyhow::Result<()> {
         tokio::signal::ctrl_c()
             .await
             .expect("Could not register ctrl+c handler");
+        info!("begin stop seqeucne");
         shard_manager.lock().await.shutdown_all().await;
+        info!("discord closed");
     });
 
     client.start().await?;
+
+    db_pool.close().await;
+    info!("db closed");
 
     Ok(())
 }
