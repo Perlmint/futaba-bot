@@ -304,13 +304,12 @@ impl Handler {
 
     async fn update_last_id(&self, message_id: &MessageId) {
         let message_id = *message_id.as_u64() as i64;
-        sqlx::query!(
-            "INSERT OR REPLACE INTO last_id (id, message_id) VALUES (0, ?)",
-            message_id
-        )
-        .execute(&self.db_pool)
-        .await
-        .unwrap();
+        if let Err(e) = sqlx::query!("UPDATE last_id SET message_id = ? WHERE id = 0", message_id)
+            .execute(&self.db_pool)
+            .await
+        {
+            error!("Update last_id failed - {:?}", e);
+        }
     }
 
     async fn fetch_statistics(&self) -> Vec<(String, i64)> {
@@ -633,6 +632,7 @@ impl Handler {
                     .expect("Failed to process messages")
                 {
                     prev_message_id = message_id;
+                    self.update_last_id(&message_id).await;
                 } else {
                     break;
                 }
@@ -780,6 +780,8 @@ impl EventHandler for Handler {
         }
 
         self.update_last_id(&message.id).await;
+        self.last_message_id
+            .store(message.id.into(), Ordering::SeqCst);
 
         if message.channel_id != self.channel_id {
             return;
@@ -789,8 +791,6 @@ impl EventHandler for Handler {
             return;
         }
 
-        self.last_message_id
-            .store(message.id.into(), Ordering::SeqCst);
         self.incr_counter(&message)
             .await
             .expect("Failed to increase counter");
@@ -1013,6 +1013,11 @@ async fn main() -> anyhow::Result<()> {
                 let id: u64 = std::env::var("INIT_MESSAGE_ID")
                     .context("INIT_MESSAGE_ID")?
                     .parse()?;
+                let iid = id as i64;
+                sqlx::query!("INSERT INTO last_id VALUES (0, ?)", iid)
+                    .execute(&db_pool)
+                    .await
+                    .unwrap();
                 id.into()
             }
         },
