@@ -1008,11 +1008,6 @@ async fn main() -> anyhow::Result<()> {
                 let id: u64 = std::env::var("INIT_MESSAGE_ID")
                     .context("INIT_MESSAGE_ID")?
                     .parse()?;
-                let iid = id as i64;
-                sqlx::query!("INSERT INTO last_id VALUES (0, ?)", iid)
-                    .execute(&db_pool)
-                    .await
-                    .unwrap();
                 id.into()
             }
         },
