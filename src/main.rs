@@ -210,6 +210,15 @@ impl<'a> EmendableMessage for CreateMessage<'a> {
     }
 }
 
+enum MissingDays {
+    Detailed(Vec<chrono::Date<chrono::FixedOffset>>),
+    Count(i64),
+}
+
+impl MissingDays {
+    const DETAIL_LIMIT_COUNT: i64 = 10;
+}
+
 struct UserDetail {
     name: String,
     longest_streaks: i64,
@@ -218,7 +227,7 @@ struct UserDetail {
     yearly_count: i64,
     yearly_ratio: i8,
     total_count: i64,
-    missing_days: Option<Vec<chrono::Date<chrono::FixedOffset>>>,
+    missing_days: MissingDays,
 }
 
 impl Handler {
@@ -488,8 +497,9 @@ impl Handler {
         .unwrap();
         let yearly_count = history.len() as i64;
 
-        let missing_days = if days - yearly_count < 10 {
-            Some({
+        let missing_count = days - yearly_count;
+        let missing_days = if missing_count < MissingDays::DETAIL_LIMIT_COUNT {
+            MissingDays::Detailed({
                 let offset = FixedOffset::east(9 * 3600);
                 let single_day_snowflakes_delta = chrono::Duration::days(1).into_snowflakes();
                 let mut date_cursor_0 = begin_date_snowflakes;
@@ -508,7 +518,7 @@ impl Handler {
                 ret
             })
         } else {
-            None
+            MissingDays::Count(missing_count)
         };
 
         let total_count = sqlx::query!(
@@ -925,21 +935,28 @@ impl EventHandler for Handler {
                                             false,
                                         )
                                         .field(
-                                            "빼먹은 날",
-                                            if let Some(missing_days) = user_detail.missing_days {
-                                                if missing_days.is_empty() {
-                                                    "없음".to_string()
-                                                } else {
-                                                    missing_days
-                                                        .iter()
-                                                        .map(|date| {
-                                                            date.format("%m/%d").to_string()
-                                                        })
-                                                        .collect::<Vec<_>>()
-                                                        .join(", ")
+                                            format!("빼먹은 날 ({}년)", user_detail.year),
+                                            match user_detail.missing_days {
+                                                MissingDays::Detailed(missing_days) => {
+                                                    if missing_days.is_empty() {
+                                                        "없음".to_string()
+                                                    } else {
+                                                        format!(
+                                                            "{}일 - {}",
+                                                            missing_days.len(),
+                                                            missing_days
+                                                                .iter()
+                                                                .map(|date| {
+                                                                    date.format("%m/%d").to_string()
+                                                                })
+                                                                .collect::<Vec<_>>()
+                                                                .join(", ")
+                                                        )
+                                                    }
                                                 }
-                                            } else {
-                                                "많음".to_string()
+                                                MissingDays::Count(count) => {
+                                                    format!("{}일", count)
+                                                }
                                             },
                                             false,
                                         )
