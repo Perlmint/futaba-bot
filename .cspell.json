@@ -1,0 +1,19 @@
+{
+    "dictionaries": [
+        "en_US",
+        "software",
+        "rust"
+    ],
+    "words": [
+        "chrono",
+        "datelike",
+        "datetime",
+        "eueoeo",
+        "futaba",
+        "repr",
+        "rustls",
+        "SIGINT",
+        "sqlx",
+        "succ"
+    ]
+}

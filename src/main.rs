@@ -158,7 +158,7 @@ impl<'a> ExactSizeIterator for YearlyStatIterator<'a> {
 }
 
 // common interface for message
-trait EmbeddableMessage {
+trait EmendableMessage {
     fn content<D: ToString>(&mut self, content: D) -> &mut Self;
     fn embed<F: FnOnce(&mut CreateEmbed) -> &mut CreateEmbed>(&mut self, f: F) -> &mut Self;
 
@@ -182,7 +182,7 @@ trait EmbeddableMessage {
     }
 }
 
-impl<'a> EmbeddableMessage for CreateInteractionResponseData<'a> {
+impl<'a> EmendableMessage for CreateInteractionResponseData<'a> {
     fn content<D: ToString>(&mut self, content: D) -> &mut Self {
         self.content(content)
     }
@@ -200,7 +200,7 @@ impl<'a> EmbeddableMessage for CreateInteractionResponseData<'a> {
     }
 }
 
-impl<'a> EmbeddableMessage for CreateMessage<'a> {
+impl<'a> EmendableMessage for CreateMessage<'a> {
     fn content<D: ToString>(&mut self, content: D) -> &mut Self {
         self.content(content)
     }
@@ -599,8 +599,8 @@ impl Handler {
         })
     }
 
-    async fn retreive_missing_messages(&self, context: Context) {
-        info!("try retreive missing message");
+    async fn retrieve_missing_messages(&self, context: Context) {
+        info!("try retrieve missing message");
         let channel = context
             .cache
             .guild_channel(self.channel_id)
@@ -671,13 +671,13 @@ impl EventHandler for Handler {
             }
         }
 
-        self.retreive_missing_messages(context).await;
+        self.retrieve_missing_messages(context).await;
 
         info!("Ready!");
     }
 
     async fn resume(&self, context: Context, _: ResumedEvent) {
-        self.retreive_missing_messages(context).await;
+        self.retrieve_missing_messages(context).await;
     }
 
     // on connected to discord
@@ -695,7 +695,7 @@ impl EventHandler for Handler {
                     choices: vec![],
                     options: vec![ApplicationCommandOption {
                         kind: ApplicationCommandOptionType::Integer,
-                        name: "yaer",
+                        name: "year",
                         description: "default is current year.",
                         required: Some(false),
                         choices: vec![],
@@ -1047,13 +1047,13 @@ async fn main() -> anyhow::Result<()> {
 
     let shard_manager = client.shard_manager.clone();
 
-    // stop the bot when SIGINT occured.
+    // stop the bot when SIGINT occurred.
     tokio::spawn(async move {
         // wait SIGINT on another running context(thread)
         tokio::signal::ctrl_c()
             .await
             .expect("Could not register ctrl+c handler");
-        info!("begin stop seqeucne");
+        info!("begin stop sequence");
         shard_manager.lock().await.shutdown_all().await;
         info!("discord closed");
     });
