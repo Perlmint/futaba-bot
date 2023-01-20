@@ -1,9 +1,5 @@
 use anyhow::Context as _;
 use chrono::{DateTime, Datelike, Duration, FixedOffset, TimeZone, Utc};
-use std::{
-    ops::Deref,
-    sync::atomic::{AtomicU64, Ordering},
-};
 
 use async_trait::async_trait;
 use log::{error, info, trace};
@@ -30,20 +26,9 @@ const COMMAND_NAME: &str = "eueoeo";
 
 const MESSAGES_LIMIT: u64 = 100;
 
-#[repr(transparent)]
-struct AtomicMessageId(AtomicU64);
-
-impl Deref for AtomicMessageId {
-    type Target = AtomicU64;
-
-    fn deref(&self) -> &Self::Target {
-        &self.0
-    }
-}
-
 struct Handler {
     db_pool: SqlitePool,
-    last_message_id: AtomicMessageId,
+    init_message_id: MessageId,
     guild_id: GuildId,
     channel_id: ChannelId,
 }
@@ -308,16 +293,6 @@ impl Handler {
             Ok(true)
         } else {
             Ok(false)
-        }
-    }
-
-    async fn update_last_id(&self, message_id: &MessageId) {
-        let message_id = *message_id.as_u64() as i64;
-        if let Err(e) = sqlx::query!("UPDATE last_id SET message_id = ? WHERE id = 0", message_id)
-            .execute(&self.db_pool)
-            .await
-        {
-            error!("Update last_id failed - {:?}", e);
         }
     }
 
@@ -620,10 +595,17 @@ impl Handler {
         // crawl all messages
         if let Some(last_message_id) = channel.last_message_id {
             // saved last message id
-            let mut prev_message_id = MessageId(
-                self.last_message_id
-                    .swap(*last_message_id.as_u64(), Ordering::AcqRel),
-            );
+            let mut prev_message_id = 
+                if let Some(record) = sqlx::query!(
+                    "SELECT message_id as `message_id:i64` FROM history order by message_id desc limit 1"
+                )
+                .fetch_optional(&self.db_pool)
+                .await.unwrap() {
+                    MessageId(record.message_id as _)
+                } else {
+                    self.init_message_id
+                }
+            ;
             info!("current last message id is {}", last_message_id);
 
             while prev_message_id < last_message_id {
@@ -642,13 +624,11 @@ impl Handler {
                     .expect("Failed to process messages")
                 {
                     prev_message_id = message_id;
-                    self.update_last_id(&message_id).await;
                 } else {
                     break;
                 }
             }
 
-            self.update_last_id(&last_message_id).await;
             info!("last message id is {}", last_message_id);
         }
     }
@@ -788,10 +768,6 @@ impl EventHandler for Handler {
         {
             return;
         }
-
-        self.update_last_id(&message.id).await;
-        self.last_message_id
-            .store(message.id.into(), Ordering::SeqCst);
 
         if message.channel_id != self.channel_id {
             return;
@@ -1014,10 +990,12 @@ async fn main() -> anyhow::Result<()> {
     sqlx::migrate!().run(&db_pool).await?;
 
     // Get last saved message_id from DB. If not exists, got 0.
-    let last_message_id = AtomicMessageId(
-        match sqlx::query!("SELECT message_id as `message_id:i64` FROM last_id WHERE id = 0")
-            .fetch_one(&db_pool)
-            .await
+    let last_message_id = MessageId(
+        match sqlx::query!(
+            "SELECT message_id as `message_id:i64` FROM history order by message_id desc limit 1"
+        )
+        .fetch_one(&db_pool)
+        .await
         {
             Ok(row) => {
                 let last_id = row.message_id as u64;
@@ -1039,10 +1017,7 @@ async fn main() -> anyhow::Result<()> {
             }
         },
     );
-    info!(
-        "Previous last_message_id = {}",
-        last_message_id.0.load(Ordering::SeqCst)
-    );
+    info!("Previous last_message_id = {}", last_message_id);
 
     // prepare serenity(discord api framework)
     let mut client = Client::builder(
@@ -1058,7 +1033,7 @@ async fn main() -> anyhow::Result<()> {
         guild_id: GuildId(guild_id),
         channel_id: ChannelId(channel_id),
 
-        last_message_id,
+        init_message_id: last_message_id,
     })
     .await?;
 
