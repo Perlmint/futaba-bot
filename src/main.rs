@@ -760,7 +760,7 @@ impl EventHandler for Handler {
     }
 
     // run on any message event
-    async fn message(&self, _: Context, message: Message) {
+    async fn message(&self, ctx: Context, message: Message) {
         if message
             .guild_id
             .map(|id| id != self.guild_id)
@@ -774,6 +774,7 @@ impl EventHandler for Handler {
         }
 
         if !message.check_message() {
+            message.delete(ctx).await.expect("Failed to remove Non-eueoeo message");
             return;
         }
 
