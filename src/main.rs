@@ -66,7 +66,16 @@ trait FutabaMessage {
 impl FutabaMessage for Message {
     // Is eueoeo by human?
     fn check_message(&self) -> bool {
-        !(self.author.bot || self.edited_timestamp.is_some() || self.content != EUEOEO)
+        if self.author.bot || self.edited_timestamp.is_some() {
+            return false;
+        }
+
+        let date = self.timestamp.with_timezone(&chrono::FixedOffset::east(9 * 3600)).date();
+        if date.month() == 4 && date.day() == 1 {
+            true
+        } else {
+            self.content == EUEOEO
+        }
     }
 }
 
