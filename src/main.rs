@@ -1020,7 +1020,8 @@ async fn main() -> anyhow::Result<()> {
         GatewayIntents::GUILDS
             | GatewayIntents::GUILD_MEMBERS
             | GatewayIntents::GUILD_MESSAGES
-            | GatewayIntents::GUILD_PRESENCES,
+            | GatewayIntents::GUILD_PRESENCES
+            | GatewayIntents::MESSAGE_CONTENT,
     )
     .application_id(application_id)
     .event_handler(Handler {
