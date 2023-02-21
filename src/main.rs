@@ -70,7 +70,10 @@ impl FutabaMessage for Message {
             return false;
         }
 
-        let date = self.timestamp.with_timezone(&chrono::FixedOffset::east(9 * 3600)).date();
+        let date = self
+            .timestamp
+            .with_timezone(&chrono::FixedOffset::east(9 * 3600))
+            .date();
         if date.month() == 4 && date.day() == 1 {
             true
         } else {
@@ -604,7 +607,7 @@ impl Handler {
         // crawl all messages
         if let Some(last_message_id) = channel.last_message_id {
             // saved last message id
-            let mut prev_message_id = 
+            let mut prev_message_id = {
                 if let Some(record) = sqlx::query!(
                     "SELECT message_id as `message_id:i64` FROM history order by message_id desc limit 1"
                 )
@@ -614,7 +617,7 @@ impl Handler {
                 } else {
                     self.init_message_id
                 }
-            ;
+            };
             info!("current last message id is {}", last_message_id);
 
             while prev_message_id < last_message_id {
@@ -783,7 +786,10 @@ impl EventHandler for Handler {
         }
 
         if !message.check_message() {
-            message.delete(ctx).await.expect("Failed to remove Non-eueoeo message");
+            message
+                .delete(ctx)
+                .await
+                .expect("Failed to remove Non-eueoeo message");
             return;
         }
 
