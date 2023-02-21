@@ -1016,7 +1016,7 @@ async fn main() -> anyhow::Result<()> {
             Ok(row) => {
                 let last_id = row.message_id as u64;
                 info!("Previous last_message_id from db = {}", last_id);
-                last_id.into()
+                last_id
             }
             Err(e) => {
                 info!("Failed to get last_id from db - {:?}", e);
@@ -1024,7 +1024,7 @@ async fn main() -> anyhow::Result<()> {
                 let id: u64 = std::env::var("INIT_MESSAGE_ID")
                     .context("INIT_MESSAGE_ID")?
                     .parse()?;
-                id.into()
+                id
             }
         },
     );
