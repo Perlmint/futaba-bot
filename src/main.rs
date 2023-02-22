@@ -26,6 +26,8 @@ use sqlx::sqlite::SqlitePoolOptions;
 mod application_command;
 mod eueoeo;
 use eueoeo::Handler as EueoeoHandler;
+mod events;
+use events::Handler as EventsHandler;
 
 #[async_trait]
 trait SubApplication {
@@ -53,7 +55,8 @@ trait SubApplication {
 }
 
 struct Handler {
-    eueoeo: eueoeo::Handler,
+    eueoeo: EueoeoHandler,
+    calendar: EventsHandler,
     guild_id: GuildId,
 }
 
@@ -166,7 +169,14 @@ impl EventHandler for Handler {
                     return;
                 }
 
-                self.eueoeo
+                if self
+                    .eueoeo
+                    .application_command_interaction_create(&context, &interaction)
+                    .await
+                {
+                    return;
+                }
+                self.calendar
                     .application_command_interaction_create(&context, &interaction)
                     .await;
             }
@@ -177,7 +187,7 @@ impl EventHandler for Handler {
                     return;
                 };
 
-                self.eueoeo.autocomplete(&context, &autocomplete).await;
+                self.calendar.autocomplete(&context, &autocomplete).await;
             }
             _ => {}
         }
@@ -251,6 +261,9 @@ async fn main() -> anyhow::Result<()> {
             db_pool: db_pool.clone(),
             channel_id: ChannelId(channel_id),
             init_message_id: last_message_id,
+        },
+        calendar: EventsHandler {
+            db_pool: db_pool.clone(),
         },
     })
     .await?;
