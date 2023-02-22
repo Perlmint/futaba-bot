@@ -799,7 +799,9 @@ impl super::SubApplication for Handler {
                         required: Some(false),
                         choices: vec![],
                         options: vec![],
+                        autocomplete: None,
                     }],
+                    autocomplete: None,
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
@@ -823,7 +825,9 @@ impl super::SubApplication for Handler {
                             },
                         ],
                         options: vec![],
+                        autocomplete: None,
                     }],
+                    autocomplete: None,
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
@@ -838,7 +842,9 @@ impl super::SubApplication for Handler {
                         required: Some(false),
                         choices: vec![],
                         options: vec![],
+                        autocomplete: None,
                     }],
+                    autocomplete: None,
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
@@ -847,6 +853,7 @@ impl super::SubApplication for Handler {
                     required: None,
                     choices: vec![],
                     options: vec![],
+                    autocomplete: None,
                 },
             ],
         };

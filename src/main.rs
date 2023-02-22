@@ -12,7 +12,11 @@ use serenity::{
         guild::Member,
         id::{ChannelId, GuildId, MessageId, UserId},
         prelude::{
-            interaction::application_command::ApplicationCommandInteraction, Ready, ResumedEvent,
+            interaction::{
+                application_command::ApplicationCommandInteraction,
+                autocomplete::AutocompleteInteraction,
+            },
+            Ready, ResumedEvent,
         },
     },
     Client,
@@ -33,6 +37,13 @@ trait SubApplication {
         &self,
         _context: &Context,
         _interaction: &ApplicationCommandInteraction,
+    ) -> bool {
+        false
+    }
+    async fn autocomplete(
+        &self,
+        _context: &Context,
+        _interaction: &AutocompleteInteraction,
     ) -> bool {
         false
     }
@@ -144,23 +155,32 @@ impl EventHandler for Handler {
 
     // run on firing slash command
     async fn interaction_create(&self, context: Context, interaction: Interaction) {
-        let interaction = if let Some(command) = interaction.application_command() {
-            command
-        } else {
-            return;
-        };
-        if interaction.guild_id != Some(self.guild_id) {
-            return;
-        }
+        match interaction.kind() {
+            InteractionType::ApplicationCommand => {
+                let interaction = if let Some(command) = interaction.application_command() {
+                    command
+                } else {
+                    return;
+                };
+                if interaction.guild_id != Some(self.guild_id) {
+                    return;
+                }
 
-        // futaba uses only application command.
-        if interaction.kind != InteractionType::ApplicationCommand {
-            return;
-        }
+                self.eueoeo
+                    .application_command_interaction_create(&context, &interaction)
+                    .await;
+            }
+            InteractionType::Autocomplete => {
+                let autocomplete = if let Some(autocomplete) = interaction.autocomplete() {
+                    autocomplete
+                } else {
+                    return;
+                };
 
-        self.eueoeo
-            .application_command_interaction_create(&context, &interaction)
-            .await;
+                self.eueoeo.autocomplete(&context, &autocomplete).await;
+            }
+            _ => {}
+        }
     }
 }
 

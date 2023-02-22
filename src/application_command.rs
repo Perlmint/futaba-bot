@@ -32,6 +32,8 @@ pub struct ApplicationCommandOption<'a> {
     pub choices: Vec<ApplicationCommandOptionChoice<'a>>,
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub options: Vec<ApplicationCommandOption<'a>>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub autocomplete: Option<bool>
 }
 
 #[derive(Debug, serde::Serialize)]
