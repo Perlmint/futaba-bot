@@ -15,14 +15,14 @@ use serenity::{
 };
 use sqlx::SqlitePool;
 
-use crate::{application_command::*, from_snowflakes, IntoSnowflakes};
+use crate::discord::{application_command::*, from_snowflakes, IntoSnowflakes, SubApplication};
 
 const EUEOEO: &str = "으어어";
 const COMMAND_NAME: &str = "eueoeo";
 
 const MESSAGES_LIMIT: u64 = 100;
 
-pub struct Handler {
+pub struct DiscordHandler {
     pub db_pool: SqlitePool,
     pub init_message_id: MessageId,
     pub channel_id: ChannelId,
@@ -196,7 +196,7 @@ struct UserDetail {
     missing_days: MissingDays,
 }
 
-impl Handler {
+impl DiscordHandler {
     async fn incr_counter(&self, message: &Message) -> anyhow::Result<bool> {
         trace!("insert {}", &message.id);
         let message_id = *message.id.as_u64() as i64;
@@ -748,7 +748,7 @@ impl Handler {
 }
 
 #[async_trait]
-impl super::SubApplication for Handler {
+impl SubApplication for DiscordHandler {
     async fn update_member(&self, member: &Member) -> anyhow::Result<()> {
         // if there is no nickname, use member's name
         let name = member.nick.as_ref().unwrap_or(&member.user.name).clone();

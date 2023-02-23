@@ -2,22 +2,25 @@ use async_trait::async_trait;
 use log::error;
 use serenity::{
     model::prelude::{
-        interaction::{application_command::{ApplicationCommandInteraction, CommandDataOption}, autocomplete::AutocompleteInteraction},
+        interaction::{
+            application_command::{ApplicationCommandInteraction, CommandDataOption},
+            autocomplete::AutocompleteInteraction,
+        },
         GuildId,
     },
     prelude::Context,
 };
 use sqlx::SqlitePool;
 
-use crate::application_command::*;
+use crate::discord::{application_command::*, SubApplication};
 
-pub struct Handler {
+pub struct DiscordHandler {
     pub db_pool: SqlitePool,
 }
 
 const COMMAND_NAME: &str = "event";
 
-impl Handler {
+impl DiscordHandler {
     async fn handle_add_command(
         &self,
         _context: &Context,
@@ -47,7 +50,7 @@ impl Handler {
 }
 
 #[async_trait]
-impl super::SubApplication for Handler {
+impl SubApplication for DiscordHandler {
     async fn ready(&self, context: &Context, guild_id: GuildId) {
         // register or update slash command
         let command = ApplicationCommand {
