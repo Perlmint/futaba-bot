@@ -201,8 +201,8 @@ pub async fn start(
     let guild_id = std::env::var("GUILD_ID")
         .context("GUILD_ID is mandatory")?
         .parse()?;
-    let channel_id = std::env::var("CHANNEL_ID")
-        .context("CHANNEL_ID is mandatory")?
+    let channel_id = std::env::var("EUEOEO_CHANNEL_ID")
+        .context("EUEOEO_CHANNEL_ID is mandatory")?
         .parse()?;
     let application_id = std::env::var("APPLICATION_ID")
         .context("APPLICATION_ID is mandatory")?
@@ -224,8 +224,8 @@ pub async fn start(
             Err(e) => {
                 info!("Failed to get last_id from db - {:?}", e);
                 info!("Use last id from env config");
-                let id: u64 = std::env::var("INIT_MESSAGE_ID")
-                    .context("INIT_MESSAGE_ID")?
+                let id: u64 = std::env::var("EUEOEO_INIT_MESSAGE_ID")
+                    .context("EUEOEO_INIT_MESSAGE_ID is mandatory for initial run")?
                     .parse()?;
                 id
             }
