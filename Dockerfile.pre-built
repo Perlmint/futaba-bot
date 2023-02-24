@@ -1,0 +1,18 @@
+FROM rust:1.50-alpine AS builder
+
+WORKDIR /ws
+
+ARG BUILD_ARCH
+
+RUN apk add --no-cache ca-certificates
+
+FROM scratch
+
+ARG BUILD_ARCH
+
+COPY target/${BUILD_ARCH}-unknown-linux-musl/release/futaba /
+COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+
+EXPOSE 80
+
+ENTRYPOINT ["/futaba"]
