@@ -29,7 +29,8 @@ async fn main() -> anyhow::Result<()> {
         let stop_receiver = stop_sender.subscribe();
         let stop_sender = stop_sender.clone();
         async move {
-            if discord::start(db_pool, stop_receiver).await.is_err() {
+            if let Err(e) = discord::start(db_pool, stop_receiver).await {
+                error!("Discord task failed with - {e:?}");
                 let _ = stop_sender.send(());
             }
         }
@@ -39,7 +40,8 @@ async fn main() -> anyhow::Result<()> {
         let stop_receiver = stop_sender.subscribe();
         let stop_sender = stop_sender.clone();
         async move {
-            if web::start(db_pool, stop_receiver).await.is_err() {
+            if let Err(e) = web::start(db_pool, stop_receiver).await {
+                error!("Web task failed with - {e:?}");
                 let _ = stop_sender.send(());
             }
         }
@@ -67,8 +69,12 @@ async fn main() -> anyhow::Result<()> {
         }
     });
 
-    let _ = discord_join.await;
-    let _ = web_join.await;
+    if let Err(e) = discord_join.await {
+        error!("Discord task is broken - {e:?}")
+    }
+    if let Err(e) = web_join.await {
+        error!("Web task is broken - {e:?}")
+    }
 
     db_pool.close().await;
     info!("db closed");
