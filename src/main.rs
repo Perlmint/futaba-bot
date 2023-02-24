@@ -34,6 +34,16 @@ async fn main() -> anyhow::Result<()> {
             }
         }
     });
+    let web_join = tokio::task::spawn({
+        let db_pool = db_pool.clone();
+        let stop_receiver = stop_sender.subscribe();
+        let stop_sender = stop_sender.clone();
+        async move {
+            if web::start(db_pool, stop_receiver).await.is_err() {
+                let _ = stop_sender.send(());
+            }
+        }
+    });
 
     tokio::task::spawn(async move {
         let sig_int = tokio::signal::ctrl_c();
@@ -58,6 +68,7 @@ async fn main() -> anyhow::Result<()> {
     });
 
     let _ = discord_join.await;
+    let _ = web_join.await;
 
     db_pool.close().await;
     info!("db closed");

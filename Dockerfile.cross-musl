@@ -39,4 +39,6 @@ ARG BUILD_ARCH
 COPY --from=builder /ws/target/${BUILD_ARCH}-unknown-linux-musl/release/futaba /
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
+EXPOSE 80
+
 ENTRYPOINT ["/futaba"]

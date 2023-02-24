@@ -26,4 +26,6 @@ FROM scratch
 COPY --from=builder /ws/target/release/futaba /
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
 
+EXPOSE 80
+
 ENTRYPOINT ["/futaba"]
