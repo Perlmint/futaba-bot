@@ -790,25 +790,18 @@ impl SubApplication for DiscordHandler {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "year",
                     description: "yearly count",
-                    required: None,
-                    choices: vec![],
                     options: vec![ApplicationCommandOption {
                         kind: ApplicationCommandOptionType::Integer,
                         name: "year",
                         description: "default is current year.",
-                        required: Some(false),
-                        choices: vec![],
-                        options: vec![],
-                        autocomplete: None,
+                        ..Default::default()
                     }],
-                    autocomplete: None,
+                    ..Default::default()
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "streaks",
                     description: "streaks ranking",
-                    required: None,
-                    choices: vec![],
                     options: vec![ApplicationCommandOption {
                         kind: ApplicationCommandOptionType::String,
                         name: "type",
@@ -824,36 +817,27 @@ impl SubApplication for DiscordHandler {
                                 value: serde_json::json!("longest"),
                             },
                         ],
-                        options: vec![],
-                        autocomplete: None,
+                        ..Default::default()
                     }],
-                    autocomplete: None,
+                    ..Default::default()
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "user",
                     description: "user detail",
-                    required: None,
-                    choices: vec![],
                     options: vec![ApplicationCommandOption {
                         kind: ApplicationCommandOptionType::User,
                         name: "user",
                         description: "If not specified, show details of you",
-                        required: Some(false),
-                        choices: vec![],
-                        options: vec![],
-                        autocomplete: None,
+                        ..Default::default()
                     }],
-                    autocomplete: None,
+                    ..Default::default()
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "total",
                     description: "total ranking",
-                    required: None,
-                    choices: vec![],
-                    options: vec![],
-                    autocomplete: None,
+                    ..Default::default()
                 },
             ],
         };

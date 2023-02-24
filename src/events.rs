@@ -61,119 +61,88 @@ impl SubApplication for DiscordHandler {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "add",
                     description: "이벤트 추가",
-                    required: None,
-                    choices: vec![],
                     options: vec![
                         ApplicationCommandOption {
                             kind: ApplicationCommandOptionType::String,
                             name: "name",
                             description: "이벤트 이름",
                             required: Some(true),
-                            choices: vec![],
-                            options: vec![],
-                            autocomplete: None,
+                            ..Default::default()
                         },
                         ApplicationCommandOption {
                             kind: ApplicationCommandOptionType::String,
                             name: "description",
                             description: "상세",
-                            required: Some(false),
-                            choices: vec![],
-                            options: vec![],
-                            autocomplete: None,
+                            ..Default::default()
                         },
                         ApplicationCommandOption {
                             kind: ApplicationCommandOptionType::String,
                             name: "begin_at",
                             description: "시작 날짜",
                             required: Some(true),
-                            choices: vec![],
-                            options: vec![],
-                            autocomplete: None,
+                            ..Default::default()
                         },
                         ApplicationCommandOption {
                             kind: ApplicationCommandOptionType::String,
                             name: "end_at",
                             description: "종료 날짜",
-                            required: Some(false),
-                            choices: vec![],
-                            options: vec![],
-                            autocomplete: None,
+                            ..Default::default()
                         },
                     ],
-                    autocomplete: None,
+                    ..Default::default()
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "edit",
                     description: "이벤트 수정",
-                    required: None,
-                    choices: vec![],
                     options: vec![
                         ApplicationCommandOption {
                             kind: ApplicationCommandOptionType::Integer,
                             name: "id",
                             description: "이벤트 id",
                             required: Some(true),
-                            choices: vec![],
-                            options: vec![],
                             autocomplete: Some(true),
+                            ..Default::default()
                         },
                         ApplicationCommandOption {
                             kind: ApplicationCommandOptionType::String,
                             name: "name",
                             description: "이벤트 이름",
-                            required: Some(false),
-                            choices: vec![],
-                            options: vec![],
-                            autocomplete: None,
+                            ..Default::default()
                         },
                         ApplicationCommandOption {
                             kind: ApplicationCommandOptionType::String,
                             name: "description",
                             description: "상세",
-                            required: Some(false),
-                            choices: vec![],
-                            options: vec![],
-                            autocomplete: None,
+                            ..Default::default()
                         },
                         ApplicationCommandOption {
                             kind: ApplicationCommandOptionType::String,
                             name: "begin_at",
                             description: "시작 날짜",
-                            required: Some(false),
-                            choices: vec![],
-                            options: vec![],
-                            autocomplete: None,
+                            ..Default::default()
                         },
                         ApplicationCommandOption {
                             kind: ApplicationCommandOptionType::String,
                             name: "end_at",
                             description: "종료 날짜",
-                            required: Some(false),
-                            choices: vec![],
-                            options: vec![],
-                            autocomplete: None,
+                            ..Default::default()
                         },
                     ],
-                    autocomplete: None,
+                    ..Default::default()
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "delete",
                     description: "이벤트 삭제",
-                    required: None,
-                    choices: vec![],
                     options: vec![ApplicationCommandOption {
                         kind: ApplicationCommandOptionType::String,
                         name: "id",
                         description: "이벤트 id",
                         required: Some(true),
-                        choices: vec![],
-                        options: vec![],
-                        autocomplete: Some(true),
+                        ..Default::default()
                     }],
-                    autocomplete: None,
+                    ..Default::default()
                 },
             ],
         };

@@ -1,8 +1,9 @@
 #![allow(dead_code)]
 
-#[derive(Debug, Clone, Copy, serde_repr::Serialize_repr)]
+#[derive(Debug, Default, Clone, Copy, serde_repr::Serialize_repr)]
 #[repr(u8)]
 pub enum ApplicationCommandOptionType {
+    #[default]
     SubCommand = 1,
     SubCommandGroup = 2,
     String = 3,
@@ -14,13 +15,13 @@ pub enum ApplicationCommandOptionType {
     Mentionable = 9,
     Number = 10,
 }
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct ApplicationCommandOptionChoice<'a> {
     pub name: &'a str,
     pub value: serde_json::Value,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct ApplicationCommandOption<'a> {
     #[serde(rename = "type")]
     pub kind: ApplicationCommandOptionType,
@@ -36,7 +37,7 @@ pub struct ApplicationCommandOption<'a> {
     pub autocomplete: Option<bool>,
 }
 
-#[derive(Debug, serde::Serialize)]
+#[derive(Debug, Default, serde::Serialize)]
 pub struct ApplicationCommand<'a> {
     pub name: &'a str,
     pub description: &'a str,
