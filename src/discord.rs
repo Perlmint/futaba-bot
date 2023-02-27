@@ -4,7 +4,7 @@ use chrono::{DateTime, Duration, TimeZone, Utc};
 use async_trait::async_trait;
 use log::info;
 use serenity::{
-    client::{Context, EventHandler},
+    client::{Cache, Context, EventHandler},
     model::{
         application::interaction::{Interaction, InteractionType},
         channel::Message,
@@ -13,7 +13,7 @@ use serenity::{
         id::{ChannelId, GuildId, MessageId, UserId},
         prelude::{
             interaction::{
-                application_command::ApplicationCommandInteraction,
+                application_command::{ApplicationCommandInteraction, CommandDataOption},
                 autocomplete::AutocompleteInteraction,
             },
             Ready, ResumedEvent,
@@ -85,6 +85,44 @@ pub fn from_snowflakes<TZ: TimeZone>(tz: &TZ, snowflakes: i64) -> chrono::DateTi
     ))
 }
 
+pub trait CommandHelper {
+    fn get_options<const N: usize>(&self, names: &[&str; N]) -> [Option<&CommandDataOption>; N];
+}
+
+impl CommandHelper for CommandDataOption {
+    fn get_options<const N: usize>(&self, names: &[&str; N]) -> [Option<&CommandDataOption>; N] {
+        self.options.get_options(names)
+    }
+}
+
+impl CommandHelper for Vec<CommandDataOption> {
+    fn get_options<const N: usize>(&self, names: &[&str; N]) -> [Option<&CommandDataOption>; N] {
+        let mut ret = [None; N];
+        for option in self.iter() {
+            if let Some(pos) = names.iter().position(|name| name == &option.name) {
+                ret[pos] = Some(option);
+            }
+        }
+
+        ret
+    }
+}
+
+pub trait ChannelHelper {
+    fn get_parent_or_self(&self, cache: &Cache) -> Self;
+}
+
+impl ChannelHelper for ChannelId {
+    fn get_parent_or_self(&self, cache: &Cache) -> Self {
+        let channel = cache.guild_channel(self).unwrap();
+        if channel.thread_metadata.is_some() {
+            channel.parent_id.unwrap()
+        } else {
+            *self
+        }
+    }
+}
+
 #[async_trait]
 impl EventHandler for Handler {
     // on connected to discord and cache system is ready
@@ -131,6 +169,7 @@ impl EventHandler for Handler {
     // on connected to discord
     async fn ready(&self, ctx: Context, _data_about_bot: Ready) {
         self.eueoeo.ready(&ctx, self.guild_id).await;
+        self.calendar.ready(&ctx, self.guild_id).await;
 
         info!("ready");
     }

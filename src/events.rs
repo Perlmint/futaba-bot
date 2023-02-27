@@ -1,18 +1,32 @@
+use std::io::BufWriter;
+
+use anyhow::Context as _;
 use async_trait::async_trait;
+use axum::{
+    body::HttpBody,
+    extract::Path,
+    http::{header, StatusCode},
+    response::IntoResponse,
+    routing::get,
+    Extension, Router,
+};
+use chrono::{NaiveDate, NaiveDateTime};
+use ics::components::Property;
 use log::error;
 use serenity::{
     model::prelude::{
         interaction::{
             application_command::{ApplicationCommandInteraction, CommandDataOption},
             autocomplete::AutocompleteInteraction,
+            InteractionResponseType,
         },
-        GuildId,
+        ChannelId, GuildId,
     },
     prelude::Context,
 };
-use sqlx::SqlitePool;
+use sqlx::{query, sqlite::SqliteRow, FromRow, Row, SqlitePool};
 
-use crate::discord::{application_command::*, SubApplication};
+use crate::discord::{application_command::*, ChannelHelper, CommandHelper, SubApplication};
 
 pub struct DiscordHandler {
     pub db_pool: SqlitePool,
@@ -20,31 +34,271 @@ pub struct DiscordHandler {
 
 const COMMAND_NAME: &str = "event";
 
+fn parse_date_optional_time(
+    s: &str,
+) -> anyhow::Result<(chrono::NaiveDate, Option<chrono::NaiveTime>)> {
+    for format in &[
+        "%Y-%m-%d %H:%M:%S",
+        "%Y-%m-%d %H:%M",
+        "%Y/%m/%d %H:%M:%S",
+        "%Y/%m/%d %H:%M",
+    ] {
+        if let Ok(datetime) = NaiveDateTime::parse_from_str(s, format) {
+            return Ok((datetime.date(), Some(datetime.time())));
+        }
+    }
+
+    for format in &["%Y-%m-%d", "%Y/%m/%d"] {
+        if let Ok(date) = NaiveDate::parse_from_str(s, format) {
+            return Ok((date, None));
+        }
+    }
+
+    anyhow::bail!("Failed to parse - {s}")
+}
+
 impl DiscordHandler {
     async fn handle_add_command(
         &self,
-        _context: &Context,
-        _interaction: &ApplicationCommandInteraction,
-        _option: &CommandDataOption,
-    ) -> serenity::Result<()> {
+        context: &Context,
+        interaction: &ApplicationCommandInteraction,
+        option: &CommandDataOption,
+    ) -> anyhow::Result<()> {
+        let channel_id = interaction.channel_id.get_parent_or_self(&context.cache).0 as i64;
+        let now = chrono::Utc::now().naive_utc();
+
+        let [name, description, begin_at, end_at] =
+            option.get_options(&["name", "description", "begin_at", "end_at"]);
+        let name = unsafe {
+            name.unwrap_unchecked()
+                .value
+                .as_ref()
+                .unwrap_unchecked()
+                .as_str()
+                .unwrap_unchecked()
+        };
+        let description = description
+            .and_then(|d| d.value.as_ref())
+            .and_then(|v| v.as_str());
+        let (begin_date, begin_time) = {
+            let begin_at = unsafe {
+                begin_at
+                    .unwrap_unchecked()
+                    .value
+                    .as_ref()
+                    .unwrap_unchecked()
+                    .as_str()
+                    .unwrap_unchecked()
+            };
+
+            parse_date_optional_time(begin_at).context("Failed to parse begin_at")?
+        };
+        let (end_date, end_time) = end_at
+            .and_then(|d| d.value.as_ref())
+            .and_then(|v| v.as_str())
+            .map(parse_date_optional_time)
+            .transpose()
+            .context("Failed to parse end_at")?
+            .map(|(d, t)| (Some(d), t))
+            .unwrap_or_default();
+
+        match sqlx::query!(
+            r#"INSERT INTO events
+            (channel, name, created_at, modified_at, description, begin_date, begin_time, end_date, end_time)
+            VALUES
+            (?, ?, ?, ?, ?, ?, ?, ?, ?)"#,
+            channel_id,
+            name,
+            now,
+            now,
+            description,
+            begin_date,
+            begin_time,
+            end_date,
+            end_time
+        )
+        .execute(&self.db_pool)
+        .await
+        {
+            Ok(r) => {
+                let id = r.last_insert_rowid();
+                if let Err(e) = interaction
+                    .create_interaction_response(context, |r| {
+                        r.kind(InteractionResponseType::ChannelMessageWithSource)
+                            .interaction_response_data(|d| {
+                                d.content(format!("새 이벤트 {name}(id: {id})가 생성되었습니다"))
+                            })
+                    })
+                    .await
+                {
+                    error!("Failed to send response - {e:?}");
+                }
+            }
+            Err(e) => {
+                error!("Failed to create event - name({name}), description({description:?}), begin_date_time({begin_at:?}), end_date_time({end_at:?}) {e:?}")
+            }
+        }
+
         Ok(())
     }
 
     async fn handle_edit_command(
         &self,
-        _context: &Context,
-        _interaction: &ApplicationCommandInteraction,
-        _option: &CommandDataOption,
-    ) -> serenity::Result<()> {
+        context: &Context,
+        interaction: &ApplicationCommandInteraction,
+        option: &CommandDataOption,
+    ) -> anyhow::Result<()> {
+        let channel_id = interaction.channel_id.get_parent_or_self(&context.cache).0 as i64;
+        let now = chrono::Utc::now().naive_utc();
+
+        let [id, name, description, begin_at, end_at] =
+            option.get_options(&["id", "name", "description", "begin_at", "end_at"]);
+        let id = unsafe {
+            id.unwrap_unchecked()
+                .value
+                .as_ref()
+                .unwrap_unchecked()
+                .as_i64()
+                .unwrap_unchecked()
+        };
+        let name = name.and_then(|o| o.value.as_ref()).and_then(|v| v.as_str());
+        let description = description
+            .and_then(|o| o.value.as_ref())
+            .and_then(|v| v.as_str());
+        let (begin_date, begin_time) = begin_at
+            .and_then(|o| o.value.as_ref())
+            .and_then(|v| v.as_str())
+            .map(parse_date_optional_time)
+            .transpose()
+            .context("Failed to parse begin_at")?
+            .map(|(d, t)| (Some(d), t))
+            .unwrap_or_default();
+        let (end_date, end_time) = end_at
+            .and_then(|o| o.value.as_ref())
+            .and_then(|v| v.as_str())
+            .map(parse_date_optional_time)
+            .transpose()
+            .context("Failed to parse end_at")?
+            .map(|(d, t)| (Some(d), t))
+            .unwrap_or_default();
+
+        let mut builder = sqlx::QueryBuilder::new("UPDATE events SET ");
+        builder.push("modified_at = ").push_bind(now);
+        if let Some(name) = name {
+            builder.push(", name = ").push_bind(name);
+        }
+        if let Some(description) = description {
+            builder.push(", description = ").push_bind(description);
+        }
+        if let Some(begin_date) = begin_date {
+            builder.push(", begin_date = ").push_bind(begin_date);
+        }
+        if let Some(begin_time) = begin_time {
+            builder.push(", begin_time = ").push_bind(begin_time);
+        }
+        if let Some(end_date) = end_date {
+            builder.push(", end_date = ").push_bind(end_date);
+        }
+        if let Some(end_time) = end_time {
+            builder.push(", end_time = ").push_bind(end_time);
+        }
+        builder
+            .push("WHERE rowid = ")
+            .push_bind(id)
+            .push(" AND channel = ")
+            .push_bind(channel_id);
+        if let Err(e) = builder.build().execute(&self.db_pool).await {
+            error!("Failed to update event - {e:?}");
+        } else if let Err(e) = interaction
+            .create_interaction_response(context, |r| {
+                r.kind(InteractionResponseType::ChannelMessageWithSource)
+                    .interaction_response_data(|d| {
+                        d.content("이벤트가 갱신되었습니다.".to_string())
+                    })
+            })
+            .await
+        {
+            error!("Failed to send response - {e:?}");
+        }
+
         Ok(())
     }
 
     async fn handle_delete_command(
         &self,
-        _context: &Context,
-        _interaction: &ApplicationCommandInteraction,
-        _option: &CommandDataOption,
-    ) -> serenity::Result<()> {
+        context: &Context,
+        interaction: &ApplicationCommandInteraction,
+        option: &CommandDataOption,
+    ) -> anyhow::Result<()> {
+        let channel_id = interaction.channel_id.get_parent_or_self(&context.cache).0 as i64;
+        let [id] = option.get_options(&["id"]);
+        let id = unsafe {
+            id.unwrap_unchecked()
+                .value
+                .as_ref()
+                .unwrap_unchecked()
+                .as_i64()
+                .unwrap_unchecked()
+        };
+        if let Err(e) = query!(
+            "DELETE FROM events WHERE rowid = ? AND channel = ?",
+            id,
+            channel_id
+        )
+        .execute(&self.db_pool)
+        .await
+        {
+            error!("Failed to update event - {e:?}");
+        } else if let Err(e) = interaction
+            .create_interaction_response(context, |r| {
+                r.kind(InteractionResponseType::ChannelMessageWithSource)
+                    .interaction_response_data(|d| {
+                        d.content("이벤트가 갱신되었습니다.".to_string())
+                    })
+            })
+            .await
+        {
+            error!("Failed to send response - {e:?}");
+        }
+
+        Ok(())
+    }
+
+    async fn handle_autocomplete(
+        &self,
+        context: &Context,
+        interaction: &AutocompleteInteraction,
+    ) -> anyhow::Result<()> {
+        let channel_id = interaction.channel_id.get_parent_or_self(&context.cache).0 as i64;
+        let [id] = interaction.data.options.get_options(&["id"]);
+        let name = id
+            .and_then(|o| o.value.as_ref())
+            .and_then(|v| v.as_str())
+            .unwrap_or("");
+        let name_pattern = format!("%{name}%");
+        match sqlx::query!(
+            "SELECT rowid, name FROM events WHERE channel = ? AND name LIKE ?",
+            channel_id,
+            name_pattern
+        )
+        .fetch_all(&self.db_pool)
+        .await
+        {
+            Ok(d) => {
+                interaction
+                    .create_autocomplete_response(context, move |r| {
+                        for record in d {
+                            r.add_int_choice(record.name, record.rowid);
+                        }
+                        r
+                    })
+                    .await?;
+            }
+            Err(e) => {
+                error!("Failed to get autocomplete data from DB - {e:?}");
+            }
+        }
+
         Ok(())
     }
 }
@@ -59,6 +313,12 @@ impl SubApplication for DiscordHandler {
             options: vec![
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
+                    name: "link",
+                    description: "캘린더 링크",
+                    ..Default::default()
+                },
+                ApplicationCommandOption {
+                    kind: ApplicationCommandOptionType::SubCommand,
                     name: "add",
                     description: "이벤트 추가",
                     options: vec![
@@ -67,12 +327,6 @@ impl SubApplication for DiscordHandler {
                             name: "name",
                             description: "이벤트 이름",
                             required: Some(true),
-                            ..Default::default()
-                        },
-                        ApplicationCommandOption {
-                            kind: ApplicationCommandOptionType::String,
-                            name: "description",
-                            description: "상세",
                             ..Default::default()
                         },
                         ApplicationCommandOption {
@@ -86,6 +340,12 @@ impl SubApplication for DiscordHandler {
                             kind: ApplicationCommandOptionType::String,
                             name: "end_at",
                             description: "종료 날짜",
+                            ..Default::default()
+                        },
+                        ApplicationCommandOption {
+                            kind: ApplicationCommandOptionType::String,
+                            name: "description",
+                            description: "상세",
                             ..Default::default()
                         },
                     ],
@@ -176,21 +436,167 @@ impl SubApplication for DiscordHandler {
             }
             _ => unsafe { std::hint::unreachable_unchecked() },
         } {
-            error!("Failed to send message: {:?}", e);
+            error!("Failed to handle message: {:?}", e);
         }
 
         true
     }
 
-    async fn autocomplete(
-        &self,
-        _context: &Context,
-        interaction: &AutocompleteInteraction,
-    ) -> bool {
+    async fn autocomplete(&self, context: &Context, interaction: &AutocompleteInteraction) -> bool {
         if interaction.data.name != COMMAND_NAME {
             return false;
         }
 
+        if let Err(e) = self.handle_autocomplete(context, interaction).await {
+            error!("Failed to handle autocomplete request: {e:?}");
+        }
+
         true
     }
+}
+
+#[derive(Debug)]
+struct Event {
+    rowid: i64,
+    name: String,
+    created_at: chrono::NaiveDateTime,
+    modified_at: chrono::NaiveDateTime,
+    description: Option<String>,
+    begin_date: chrono::NaiveDate,
+    begin_time: Option<chrono::NaiveTime>,
+    end_date: Option<chrono::NaiveDate>,
+    end_time: Option<chrono::NaiveTime>,
+}
+
+impl<'r> FromRow<'r, SqliteRow> for Event {
+    fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
+        let rowid = row.get_unchecked("rowid");
+        let name = row.get_unchecked("name");
+        let created_at = chrono::NaiveDateTime::from_timestamp(row.get_unchecked("created_at"), 0);
+        let modified_at =
+            chrono::NaiveDateTime::from_timestamp(row.get_unchecked("modified_at"), 0);
+        let description = row.get_unchecked("description");
+        let begin_date = chrono::NaiveDate::parse_from_str(
+            row.get_unchecked::<&str, _>("begin_date"),
+            "%Y-%m-%d",
+        )
+        .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        let begin_time = row
+            .get_unchecked::<Option<&str>, _>("begin_time")
+            .map(|s| chrono::NaiveTime::parse_from_str(s, "%H:%M:%S"))
+            .transpose()
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        let end_date = row
+            .get_unchecked::<Option<&str>, _>("end_date")
+            .map(|s| chrono::NaiveDate::parse_from_str(s, "%Y-%m-%d"))
+            .transpose()
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        let end_time = row
+            .get_unchecked::<Option<&str>, _>("end_time")
+            .map(|s| chrono::NaiveTime::parse_from_str(s, "%H:%M:%S"))
+            .transpose()
+            .map_err(|e| sqlx::Error::Decode(Box::new(e)))?;
+        Ok(Self {
+            rowid,
+            name,
+            created_at,
+            modified_at,
+            description,
+            begin_date,
+            begin_time,
+            end_date,
+            end_time,
+        })
+    }
+}
+
+impl From<Event> for ics::Event<'static> {
+    fn from(value: Event) -> Self {
+        let created_at = value.created_at.format("%Y%m%dT%H%M%S").to_string();
+        let modified_at = value.modified_at.format("%Y%m%dT%H%M%S").to_string();
+
+        let mut event = ics::Event::new(format!("{}", value.rowid), created_at.clone());
+        event.push(Property::new("SUMMARY", value.name));
+        if let Some(description) = value.description {
+            event.push(Property::new("DESCRIPTION", description));
+        }
+        event.push(Property::new("DTSTAMP", created_at));
+        event.push(Property::new("LAST-MODIFIED", modified_at));
+
+        fn write_date_time<'a>(
+            event: &mut ics::Event<'a>,
+            key: &'a str,
+            date: chrono::NaiveDate,
+            time: Option<chrono::NaiveTime>,
+        ) {
+            match time {
+                Some(t) => event.push(Property::new(
+                    format!("{key};TZID=Asia/Seoul"),
+                    date.and_time(t).format("%Y%m%dT%H%M%S").to_string(),
+                )),
+                None => event.push(Property::new(
+                    format!("{key};VALUE=DATE"),
+                    date.format("%Y%m%d").to_string(),
+                )),
+            }
+        }
+        write_date_time(&mut event, "DTSTART", value.begin_date, value.begin_time);
+        if let Some(end_date) = value.end_date {
+            write_date_time(&mut event, "DTEND", end_date, value.end_time);
+        }
+
+        event
+    }
+}
+
+async fn events_to_ics(db_pool: SqlitePool, channel_id: ChannelId) -> anyhow::Result<String> {
+    let channel_id = channel_id.0 as i64;
+    let events: Vec<Event> = sqlx::query_as(
+        r#"SELECT
+            rowid, name, created_at, modified_at, description,
+            begin_date, begin_time, end_date, end_time FROM events WHERE channel = ?"#,
+    )
+    .bind(channel_id)
+    .fetch_all(&db_pool)
+    .await?;
+    let mut calendar = ics::ICalendar::new("2.0", "futaba");
+    calendar.push(Property::new("X-WR-TIMEZONE", "Asia/Seoul"));
+    calendar.add_timezone(ics::TimeZone::standard(
+        "Asia/Seoul",
+        ics::Standard::new("19700101T000000", "1000", "0900"),
+    ));
+    for event in events {
+        calendar.add_event(event.into());
+    }
+
+    let mut writer = BufWriter::new(Vec::new());
+    calendar.write(&mut writer).unwrap();
+    let buffer = writer.into_inner()?;
+
+    Ok(String::from_utf8(buffer)?)
+}
+
+async fn serve_events(
+    Path(channel_id): Path<u64>,
+    Extension(db_pool): Extension<SqlitePool>,
+) -> impl IntoResponse {
+    match events_to_ics(db_pool, ChannelId(channel_id)).await {
+        Ok(ics) => (
+            StatusCode::OK,
+            [(header::CONTENT_TYPE, "text/calendar")],
+            ics,
+        ),
+        Err(e) => {
+            error!("Failed to render calendar for Channel({channel_id}) - {e:?}");
+            (
+                StatusCode::NOT_FOUND,
+                [(header::CONTENT_TYPE, "text/plain")],
+                "".to_string(),
+            )
+        }
+    }
+}
+
+pub fn router<S: Sync + Send + Clone + 'static, B: HttpBody + Send + 'static>() -> Router<S, B> {
+    Router::new().route("/:channel_id", get(serve_events))
 }

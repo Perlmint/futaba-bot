@@ -377,6 +377,7 @@ dependencies = [
  "axum",
  "chrono",
  "futures",
+ "ics",
  "log",
  "once_cell",
  "pretty_env_logger",
@@ -661,6 +662,12 @@ dependencies = [
  "tokio",
  "tokio-rustls",
 ]
+
+[[package]]
+name = "ics"
+version = "0.5.8"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "3ebec52f461ade2d19e7b594ecbcd0723ba0ab0eefa8aae2281b78ff461a91fa"
 
 [[package]]
 name = "idna"
@@ -1393,6 +1400,7 @@ dependencies = [
  "bitflags",
  "byteorder",
  "bytes",
+ "chrono",
  "crc",
  "crossbeam-queue",
  "either",

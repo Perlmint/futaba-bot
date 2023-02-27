@@ -20,6 +20,7 @@ pub async fn start(
 
     let router = axum::Router::new()
         .route("/", get(root))
+        .nest("/events", super::events::router())
         .layer(Extension(db_pool));
 
     axum::Server::bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port).into())

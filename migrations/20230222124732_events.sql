@@ -1,8 +1,12 @@
 -- Add migration script here
 CREATE TABLE IF NOT EXISTS events (
-    event_id INTEGER(64) PRIMARY KEY NOT NULL,
-    begin_date_time DATETIME NOT NULL,
-    end_date_time DATETIME,
+    channel TEXT NOT NULL,
+    created_at DATETIME NOT NULL,
+    modified_at DATETIME NOT NULL,
     name TEXT NOT NULL,
-    description TEXT
+    description TEXT,
+    begin_date DATE NOT NULL,
+    begin_time TIME,
+    end_date DATE,
+    end_time TIME
 );
