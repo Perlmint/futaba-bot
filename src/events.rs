@@ -66,6 +66,28 @@ impl DiscordHandler {
         }
     }
 
+    async fn handle_link_command(
+        &self,
+        context: &Context,
+        interaction: &ApplicationCommandInteraction,
+    ) -> anyhow::Result<()> {
+        let channel_id = interaction.channel_id.get_parent_or_self(&context.cache).0 as i64;
+
+        if let Err(e) = interaction
+            .create_interaction_response(context, |r| {
+                r.kind(InteractionResponseType::ChannelMessageWithSource)
+                    .interaction_response_data(|d| {
+                        d.content(format!("https://{}/events/{}", self.domain, channel_id))
+                    })
+            })
+            .await
+        {
+            error!("Failed to send response - {e:?}");
+        }
+
+        Ok(())
+    }
+
     async fn handle_add_command(
         &self,
         context: &Context,
@@ -436,6 +458,7 @@ impl SubApplication for DiscordHandler {
 
         let option = unsafe { interaction.data.options.first().unwrap_unchecked() };
         if let Err(e) = match option.name.as_str() {
+            "link" => self.handle_link_command(context, interaction).await,
             "add" => self.handle_add_command(context, interaction, option).await,
             "edit" => self.handle_edit_command(context, interaction, option).await,
             "delete" => {
