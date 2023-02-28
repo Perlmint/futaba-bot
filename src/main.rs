@@ -55,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
         let stop_receiver = stop_sender.subscribe();
         let stop_sender = stop_sender.clone();
         async move {
-            if let Err(e) = web::start(db_pool, &config, stop_receiver).await {
+            if let Err(e) = web::start(db_pool, config, stop_receiver).await {
                 error!("Web task failed with - {e:?}");
                 let _ = stop_sender.send(());
             }

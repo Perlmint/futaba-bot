@@ -1,4 +1,4 @@
-use std::io::BufWriter;
+use std::{io::BufWriter, sync::Arc};
 
 use anyhow::Context as _;
 use async_trait::async_trait;
@@ -20,7 +20,7 @@ use serenity::{
             autocomplete::AutocompleteInteraction,
             InteractionResponseType,
         },
-        ChannelId, GuildId,
+        GuildId,
     },
     prelude::Context,
 };
@@ -541,29 +541,28 @@ impl<'r> FromRow<'r, SqliteRow> for Event {
     }
 }
 
-impl From<Event> for ics::Event<'static> {
-    fn from(value: Event) -> Self {
-        let created_at = value.created_at.format("%Y%m%dT%H%M%S").to_string();
-        let modified_at = value.modified_at.format("%Y%m%dT%H%M%S").to_string();
+impl Event {
+    fn to_ics_event(self, namespace: &str) -> ics::Event<'static> {
+        let created_at = self.created_at.format("%Y%m%dT%H%M%S").to_string();
+        let modified_at = self.modified_at.format("%Y%m%dT%H%M%S").to_string();
 
-        let mut event = ics::Event::new(format!("{}", value.rowid), created_at.clone());
-        event.push(Property::new("SUMMARY", value.name));
-        if let Some(description) = value.description {
+        let mut event = ics::Event::new(format!("{}@{namespace}", self.rowid), created_at.clone());
+        event.push(Property::new("SUMMARY", self.name));
+        if let Some(description) = self.description {
             event.push(Property::new("DESCRIPTION", description));
         }
-        event.push(Property::new("DTSTAMP", created_at));
         event.push(Property::new("LAST-MODIFIED", modified_at));
 
         fn write_date_time<'a>(
             event: &mut ics::Event<'a>,
             key: &'a str,
-            date: chrono::NaiveDate,
-            time: Option<chrono::NaiveTime>,
+            date: &chrono::NaiveDate,
+            time: &Option<chrono::NaiveTime>,
         ) {
             match time {
                 Some(t) => event.push(Property::new(
                     format!("{key};TZID=Asia/Seoul"),
-                    date.and_time(t).format("%Y%m%dT%H%M%S").to_string(),
+                    date.and_time(t.clone()).format("%Y%m%dT%H%M%S").to_string(),
                 )),
                 None => event.push(Property::new(
                     format!("{key};VALUE=DATE"),
@@ -571,33 +570,27 @@ impl From<Event> for ics::Event<'static> {
                 )),
             }
         }
-        write_date_time(&mut event, "DTSTART", value.begin_date, value.begin_time);
-        if let Some(end_date) = value.end_date {
-            write_date_time(&mut event, "DTEND", end_date, value.end_time);
+        write_date_time(&mut event, "DTSTART", &self.begin_date, &self.begin_time);
+        if let Some(end_date) = self.end_date {
+            write_date_time(&mut event, "DTEND", &end_date, &self.end_time);
+        } else {
+            write_date_time(&mut event, "DTENd", &self.begin_date, &self.begin_time);
         }
 
         event
     }
 }
 
-async fn events_to_ics(db_pool: SqlitePool, channel_id: ChannelId) -> anyhow::Result<String> {
-    let channel_id = channel_id.0 as i64;
-    let events: Vec<Event> = sqlx::query_as(
-        r#"SELECT
-            rowid, name, created_at, modified_at, description,
-            begin_date, begin_time, end_date, end_time FROM events WHERE channel = ?"#,
-    )
-    .bind(channel_id)
-    .fetch_all(&db_pool)
-    .await?;
+async fn events_to_ics(events: Vec<Event>, domain: &str) -> anyhow::Result<String> {
     let mut calendar = ics::ICalendar::new("2.0", "futaba");
     calendar.push(Property::new("X-WR-TIMEZONE", "Asia/Seoul"));
+    calendar.push(Property::new("CALSCALE", "GREGORIAN"));
     calendar.add_timezone(ics::TimeZone::standard(
         "Asia/Seoul",
-        ics::Standard::new("19700101T000000", "1000", "0900"),
+        ics::Standard::new("19700101T000000", "+1000", "+0900"),
     ));
     for event in events {
-        calendar.add_event(event.into());
+        calendar.add_event(event.to_ics_event(domain));
     }
 
     let mut writer = BufWriter::new(Vec::new());
@@ -610,8 +603,25 @@ async fn events_to_ics(db_pool: SqlitePool, channel_id: ChannelId) -> anyhow::Re
 async fn serve_events(
     Path(channel_id): Path<u64>,
     Extension(db_pool): Extension<SqlitePool>,
+    Extension(config): Extension<Arc<crate::Config>>,
 ) -> impl IntoResponse {
-    match events_to_ics(db_pool, ChannelId(channel_id)).await {
+    let events = {
+        let channel_id = channel_id as i64;
+        sqlx::query_as(
+            r#"SELECT
+                rowid, name, created_at, modified_at, description,
+                begin_date, begin_time, end_date, end_time FROM events WHERE channel = ?"#,
+        )
+        .bind(channel_id)
+        .fetch_all(&db_pool)
+        .await
+        .context("Failed to fetch events")
+    };
+    let ics = match events {
+        Ok(events) => events_to_ics(events, &config.web.domain).await,
+        Err(e) => Err(e),
+    };
+    match ics {
         Ok(ics) => (
             StatusCode::OK,
             [(header::CONTENT_TYPE, "text/calendar")],
