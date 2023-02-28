@@ -16,7 +16,10 @@ use serenity::{
 };
 use sqlx::SqlitePool;
 
-use crate::discord::{application_command::*, from_snowflakes, IntoSnowflakes, SubApplication};
+use crate::discord::{
+    application_command::*, from_snowflakes, CommandDataOptionHelper, CommandHelper,
+    IntoSnowflakes, SubApplication,
+};
 
 const EUEOEO: &str = "으어어";
 const COMMAND_NAME: &str = "eueoeo";
@@ -645,17 +648,8 @@ impl DiscordHandler {
         interaction: &ApplicationCommandInteraction,
         option: &CommandDataOption,
     ) -> serenity::Result<()> {
-        let year_arg = option
-            .options
-            .first()
-            .and_then(|opt| {
-                if let Some(v) = &opt.value {
-                    v.as_u64()
-                } else {
-                    None
-                }
-            })
-            .map(|v| v as i32);
+        let [year] = option.get_options(&["year"]);
+        let year_arg = year.as_i64().map(|v| v as i32);
         let (year, stats) = self.fetch_yearly_statistics(year_arg).await;
         interaction
             .create_interaction_response(&context.http, |r| {
@@ -677,11 +671,8 @@ impl DiscordHandler {
         interaction: &ApplicationCommandInteraction,
         option: &CommandDataOption,
     ) -> serenity::Result<()> {
-        let ranking_basis = unsafe {
-            let ranking_basis = option.options.first().unwrap_unchecked();
-            let ranking_basis = ranking_basis.value.as_ref().unwrap_unchecked();
-            ranking_basis.as_str().unwrap_unchecked()
-        };
+        let [ranking_basis] = option.get_options(&["type"]);
+        let ranking_basis = unsafe { ranking_basis.as_str_unchecked() };
         let (stat_name, streak_arg) = match ranking_basis {
             "current" => ("현재 연속", false),
             "longest" => ("최장 연속", true),
@@ -704,11 +695,11 @@ impl DiscordHandler {
         interaction: &ApplicationCommandInteraction,
         option: &CommandDataOption,
     ) -> serenity::Result<()> {
+        let [user_id] = option.get_options(&["user"]);
+
         let user_id: i64 = unsafe {
-            if let Some(user) = option.options.first() {
-                let user = user.value.as_ref().unwrap_unchecked();
-                let user = user.as_str().unwrap_unchecked();
-                user.parse().unwrap_unchecked()
+            if let Some(user) = user_id {
+                user.as_str_unchecked().parse().unwrap_unchecked()
             } else {
                 *interaction
                     .member

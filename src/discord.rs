@@ -133,6 +133,66 @@ impl ChannelHelper for ChannelId {
     }
 }
 
+pub trait CommandDataOptionHelper {
+    fn as_str(&self) -> Option<&str>;
+    fn as_u64(&self) -> Option<u64>;
+    fn as_i64(&self) -> Option<i64>;
+    unsafe fn as_str_unchecked(&self) -> &str;
+    unsafe fn as_i64_unchecked(&self) -> i64;
+}
+
+impl CommandDataOptionHelper for CommandDataOption {
+    fn as_str(&self) -> Option<&str> {
+        self.value.as_ref().and_then(|v| v.as_str())
+    }
+
+    fn as_u64(&self) -> Option<u64> {
+        self.value.as_ref().and_then(|v| v.as_u64())
+    }
+
+    fn as_i64(&self) -> Option<i64> {
+        self.value.as_ref().and_then(|v| v.as_i64())
+    }
+
+    unsafe fn as_str_unchecked(&self) -> &str {
+        self.value
+            .as_ref()
+            .unwrap_unchecked()
+            .as_str()
+            .unwrap_unchecked()
+    }
+
+    unsafe fn as_i64_unchecked(&self) -> i64 {
+        self.value
+            .as_ref()
+            .unwrap_unchecked()
+            .as_i64()
+            .unwrap_unchecked()
+    }
+}
+
+impl<T: CommandDataOptionHelper> CommandDataOptionHelper for Option<&T> {
+    fn as_str(&self) -> Option<&str> {
+        self.and_then(|o| o.as_str())
+    }
+
+    fn as_u64(&self) -> Option<u64> {
+        self.and_then(|o| o.as_u64())
+    }
+
+    fn as_i64(&self) -> Option<i64> {
+        self.and_then(|o| o.as_i64())
+    }
+
+    unsafe fn as_str_unchecked(&self) -> &str {
+        self.unwrap_unchecked().as_str_unchecked()
+    }
+
+    unsafe fn as_i64_unchecked(&self) -> i64 {
+        self.unwrap_unchecked().as_i64_unchecked()
+    }
+}
+
 #[async_trait]
 impl EventHandler for Handler {
     // on connected to discord and cache system is ready
@@ -260,7 +320,7 @@ pub(crate) async fn start(
 
     // prepare serenity(discord api framework)
     let mut client = Client::builder(
-        &token,
+        token,
         GatewayIntents::GUILDS
             | GatewayIntents::GUILD_MEMBERS
             | GatewayIntents::GUILD_MESSAGES

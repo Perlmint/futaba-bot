@@ -26,7 +26,9 @@ use serenity::{
 };
 use sqlx::{query, sqlite::SqliteRow, FromRow, Row, SqlitePool};
 
-use crate::discord::{application_command::*, ChannelHelper, CommandHelper, SubApplication};
+use crate::discord::{
+    application_command::*, ChannelHelper, CommandDataOptionHelper, CommandHelper, SubApplication,
+};
 
 pub(crate) struct DiscordHandler {
     db_pool: SqlitePool,
@@ -99,33 +101,15 @@ impl DiscordHandler {
 
         let [name, description, begin_at, end_at] =
             option.get_options(&["name", "description", "begin_at", "end_at"]);
-        let name = unsafe {
-            name.unwrap_unchecked()
-                .value
-                .as_ref()
-                .unwrap_unchecked()
-                .as_str()
-                .unwrap_unchecked()
-        };
-        let description = description
-            .and_then(|d| d.value.as_ref())
-            .and_then(|v| v.as_str());
+        let name = unsafe { name.as_str_unchecked() };
+        let description = description.as_str();
         let (begin_date, begin_time) = {
-            let begin_at = unsafe {
-                begin_at
-                    .unwrap_unchecked()
-                    .value
-                    .as_ref()
-                    .unwrap_unchecked()
-                    .as_str()
-                    .unwrap_unchecked()
-            };
+            let begin_at = unsafe { begin_at.as_str_unchecked() };
 
             parse_date_optional_time(begin_at).context("Failed to parse begin_at")?
         };
         let (end_date, end_time) = end_at
-            .and_then(|d| d.value.as_ref())
-            .and_then(|v| v.as_str())
+            .as_str()
             .map(parse_date_optional_time)
             .transpose()
             .context("Failed to parse end_at")?
@@ -183,29 +167,18 @@ impl DiscordHandler {
 
         let [id, name, description, begin_at, end_at] =
             option.get_options(&["id", "name", "description", "begin_at", "end_at"]);
-        let id = unsafe {
-            id.unwrap_unchecked()
-                .value
-                .as_ref()
-                .unwrap_unchecked()
-                .as_i64()
-                .unwrap_unchecked()
-        };
-        let name = name.and_then(|o| o.value.as_ref()).and_then(|v| v.as_str());
-        let description = description
-            .and_then(|o| o.value.as_ref())
-            .and_then(|v| v.as_str());
+        let id = unsafe { id.as_i64_unchecked() };
+        let name = name.as_str();
+        let description = description.as_str();
         let (begin_date, begin_time) = begin_at
-            .and_then(|o| o.value.as_ref())
-            .and_then(|v| v.as_str())
+            .as_str()
             .map(parse_date_optional_time)
             .transpose()
             .context("Failed to parse begin_at")?
             .map(|(d, t)| (Some(d), t))
             .unwrap_or_default();
         let (end_date, end_time) = end_at
-            .and_then(|o| o.value.as_ref())
-            .and_then(|v| v.as_str())
+            .as_str()
             .map(parse_date_optional_time)
             .transpose()
             .context("Failed to parse end_at")?
@@ -262,14 +235,7 @@ impl DiscordHandler {
     ) -> anyhow::Result<()> {
         let channel_id = interaction.channel_id.get_parent_or_self(&context).await.0 as i64;
         let [id] = option.get_options(&["id"]);
-        let id = unsafe {
-            id.unwrap_unchecked()
-                .value
-                .as_ref()
-                .unwrap_unchecked()
-                .as_i64()
-                .unwrap_unchecked()
-        };
+        let id = unsafe { id.as_i64_unchecked() };
         if let Err(e) = query!(
             "DELETE FROM events WHERE rowid = ? AND channel = ?",
             id,
@@ -301,10 +267,7 @@ impl DiscordHandler {
     ) -> anyhow::Result<()> {
         let channel_id = interaction.channel_id.get_parent_or_self(&context).await.0 as i64;
         let [id] = interaction.data.options.get_options(&["id"]);
-        let name = id
-            .and_then(|o| o.value.as_ref())
-            .and_then(|v| v.as_str())
-            .unwrap_or("");
+        let name = id.as_str().unwrap_or("");
         let name_pattern = format!("%{name}%");
         match sqlx::query!(
             "SELECT rowid, name FROM events WHERE channel = ? AND name LIKE ?",
@@ -542,11 +505,11 @@ impl<'r> FromRow<'r, SqliteRow> for Event {
 }
 
 impl Event {
-    fn to_ics_event(self, namespace: &str) -> ics::Event<'static> {
+    fn into_ics_event(self, namespace: &str) -> ics::Event<'static> {
         let created_at = self.created_at.format("%Y%m%dT%H%M%S").to_string();
         let modified_at = self.modified_at.format("%Y%m%dT%H%M%S").to_string();
 
-        let mut event = ics::Event::new(format!("{}@{namespace}", self.rowid), created_at.clone());
+        let mut event = ics::Event::new(format!("{}@{namespace}", self.rowid), created_at);
         event.push(Property::new("SUMMARY", self.name));
         if let Some(description) = self.description {
             event.push(Property::new("DESCRIPTION", description));
@@ -562,7 +525,7 @@ impl Event {
             match time {
                 Some(t) => event.push(Property::new(
                     format!("{key};TZID=Asia/Seoul"),
-                    date.and_time(t.clone()).format("%Y%m%dT%H%M%S").to_string(),
+                    date.and_time(*t).format("%Y%m%dT%H%M%S").to_string(),
                 )),
                 None => event.push(Property::new(
                     format!("{key};VALUE=DATE"),
@@ -590,7 +553,7 @@ async fn events_to_ics(events: Vec<Event>, domain: &str) -> anyhow::Result<Strin
         ics::Standard::new("19700101T000000", "+1000", "+0900"),
     ));
     for event in events {
-        calendar.add_event(event.to_ics_event(domain));
+        calendar.add_event(event.into_ics_event(domain));
     }
 
     let mut writer = BufWriter::new(Vec::new());
