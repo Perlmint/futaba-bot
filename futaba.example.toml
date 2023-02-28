@@ -1,0 +1,11 @@
+[discord]
+token = "token"
+guild_id = 0
+application_id = 0
+
+[eueoeo]
+channel_id = 0
+init_message_id = 0
+
+[web]
+domain = "example.com"
