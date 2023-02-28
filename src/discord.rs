@@ -1,8 +1,8 @@
-use anyhow::Context as _;
 use chrono::{DateTime, Duration, TimeZone, Utc};
 
 use async_trait::async_trait;
 use log::info;
+use serde::Deserialize;
 use serenity::{
     client::{Cache, Context, EventHandler},
     model::{
@@ -10,7 +10,7 @@ use serenity::{
         channel::Message,
         gateway::GatewayIntents,
         guild::Member,
-        id::{ChannelId, GuildId, MessageId, UserId},
+        id::{ChannelId, GuildId, UserId},
         prelude::{
             interaction::{
                 application_command::{ApplicationCommandInteraction, CommandDataOption},
@@ -232,45 +232,21 @@ impl EventHandler for Handler {
     }
 }
 
-pub async fn start(
+#[derive(Debug, Deserialize)]
+pub(crate) struct Config {
+    token: String,
+    guild_id: u64,
+    application_id: u64,
+}
+
+pub(crate) async fn start(
     db_pool: SqlitePool,
+    config: &super::Config,
     mut stop_signal: tokio::sync::broadcast::Receiver<()>,
 ) -> anyhow::Result<()> {
-    let token = std::env::var("DISCORD_BOT_TOKEN").context("DISCORD_BOT_TOKEN is mandatory")?;
-    let guild_id = std::env::var("GUILD_ID")
-        .context("GUILD_ID is mandatory")?
-        .parse()?;
-    let channel_id = std::env::var("EUEOEO_CHANNEL_ID")
-        .context("EUEOEO_CHANNEL_ID is mandatory")?
-        .parse()?;
-    let application_id = std::env::var("APPLICATION_ID")
-        .context("APPLICATION_ID is mandatory")?
-        .parse()?;
-
-    // Get last saved message_id from DB. If not exists, got 0.
-    let last_message_id = MessageId(
-        match sqlx::query!(
-            "SELECT message_id as `message_id:i64` FROM history order by message_id desc limit 1"
-        )
-        .fetch_one(&db_pool)
-        .await
-        {
-            Ok(row) => {
-                let last_id = row.message_id as u64;
-                info!("Previous last_message_id from db = {}", last_id);
-                last_id
-            }
-            Err(e) => {
-                info!("Failed to get last_id from db - {:?}", e);
-                info!("Use last id from env config");
-                let id: u64 = std::env::var("EUEOEO_INIT_MESSAGE_ID")
-                    .context("EUEOEO_INIT_MESSAGE_ID is mandatory for initial run")?
-                    .parse()?;
-                id
-            }
-        },
-    );
-    info!("Previous last_message_id = {}", last_message_id);
+    let token = &config.discord.token;
+    let guild_id = config.discord.guild_id;
+    let application_id = config.discord.application_id;
 
     // prepare serenity(discord api framework)
     let mut client = Client::builder(
@@ -284,14 +260,8 @@ pub async fn start(
     .application_id(application_id)
     .event_handler(Handler {
         guild_id: GuildId(guild_id),
-        eueoeo: EueoeoHandler {
-            db_pool: db_pool.clone(),
-            channel_id: ChannelId(channel_id),
-            init_message_id: last_message_id,
-        },
-        calendar: EventsHandler {
-            db_pool: db_pool.clone(),
-        },
+        eueoeo: EueoeoHandler::new(db_pool.clone(), config).await,
+        calendar: EventsHandler::new(db_pool.clone(), config),
     })
     .await?;
 

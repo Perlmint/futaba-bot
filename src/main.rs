@@ -1,4 +1,7 @@
+use std::sync::Arc;
+
 use log::{error, info};
+use serde::Deserialize;
 use sqlx::sqlite::SqlitePoolOptions;
 
 mod discord;
@@ -6,9 +9,20 @@ mod eueoeo;
 mod events;
 mod web;
 
+#[derive(Debug, Deserialize)]
+pub(crate) struct Config {
+    discord: discord::Config,
+    web: web::Config,
+    eueoeo: eueoeo::Config,
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     pretty_env_logger::init();
+
+    let config = Arc::new(toml::from_str::<Config>(
+        &tokio::fs::read_to_string("futaba.toml").await?,
+    )?);
 
     let db_pool = SqlitePoolOptions::new()
         .connect(&{
@@ -28,8 +42,9 @@ async fn main() -> anyhow::Result<()> {
         let db_pool = db_pool.clone();
         let stop_receiver = stop_sender.subscribe();
         let stop_sender = stop_sender.clone();
+        let config = config.clone();
         async move {
-            if let Err(e) = discord::start(db_pool, stop_receiver).await {
+            if let Err(e) = discord::start(db_pool, &config, stop_receiver).await {
                 error!("Discord task failed with - {e:?}");
                 let _ = stop_sender.send(());
             }
@@ -40,7 +55,7 @@ async fn main() -> anyhow::Result<()> {
         let stop_receiver = stop_sender.subscribe();
         let stop_sender = stop_sender.clone();
         async move {
-            if let Err(e) = web::start(db_pool, stop_receiver).await {
+            if let Err(e) = web::start(db_pool, &config, stop_receiver).await {
                 error!("Web task failed with - {e:?}");
                 let _ = stop_sender.send(());
             }

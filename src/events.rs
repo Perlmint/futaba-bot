@@ -28,8 +28,9 @@ use sqlx::{query, sqlite::SqliteRow, FromRow, Row, SqlitePool};
 
 use crate::discord::{application_command::*, ChannelHelper, CommandHelper, SubApplication};
 
-pub struct DiscordHandler {
-    pub db_pool: SqlitePool,
+pub(crate) struct DiscordHandler {
+    db_pool: SqlitePool,
+    domain: String,
 }
 
 const COMMAND_NAME: &str = "event";
@@ -58,6 +59,13 @@ fn parse_date_optional_time(
 }
 
 impl DiscordHandler {
+    pub fn new(db_pool: SqlitePool, config: &crate::Config) -> Self {
+        Self {
+            db_pool,
+            domain: config.web.domain.clone(),
+        }
+    }
+
     async fn handle_add_command(
         &self,
         context: &Context,
