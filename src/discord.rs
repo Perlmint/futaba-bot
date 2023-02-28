@@ -4,7 +4,8 @@ use async_trait::async_trait;
 use log::info;
 use serde::Deserialize;
 use serenity::{
-    client::{Cache, Context, EventHandler},
+    client::{Context, EventHandler},
+    http::CacheHttp,
     model::{
         application::interaction::{Interaction, InteractionType},
         channel::Message,
@@ -16,7 +17,7 @@ use serenity::{
                 application_command::{ApplicationCommandInteraction, CommandDataOption},
                 autocomplete::AutocompleteInteraction,
             },
-            Ready, ResumedEvent,
+            Channel, Ready, ResumedEvent,
         },
     },
     Client,
@@ -108,15 +109,24 @@ impl CommandHelper for Vec<CommandDataOption> {
     }
 }
 
+#[async_trait]
 pub trait ChannelHelper {
-    fn get_parent_or_self(&self, cache: &Cache) -> Self;
+    async fn get_parent_or_self(&self, cache: &impl CacheHttp) -> Self;
 }
 
+#[async_trait]
 impl ChannelHelper for ChannelId {
-    fn get_parent_or_self(&self, cache: &Cache) -> Self {
-        let channel = cache.guild_channel(self).unwrap();
-        if channel.thread_metadata.is_some() {
-            channel.parent_id.unwrap()
+    async fn get_parent_or_self(&self, cache: &impl CacheHttp) -> Self {
+        let channel = self
+            .to_channel(cache)
+            .await
+            .expect("Failed to get channel detail");
+        if let Channel::Guild(channel) = channel {
+            if channel.thread_metadata.is_some() {
+                channel.parent_id.unwrap()
+            } else {
+                *self
+            }
         } else {
             *self
         }

@@ -71,7 +71,7 @@ impl DiscordHandler {
         context: &Context,
         interaction: &ApplicationCommandInteraction,
     ) -> anyhow::Result<()> {
-        let channel_id = interaction.channel_id.get_parent_or_self(&context.cache).0 as i64;
+        let channel_id = interaction.channel_id.get_parent_or_self(&context).await.0 as i64;
 
         if let Err(e) = interaction
             .create_interaction_response(context, |r| {
@@ -94,7 +94,7 @@ impl DiscordHandler {
         interaction: &ApplicationCommandInteraction,
         option: &CommandDataOption,
     ) -> anyhow::Result<()> {
-        let channel_id = interaction.channel_id.get_parent_or_self(&context.cache).0 as i64;
+        let channel_id = interaction.channel_id.get_parent_or_self(&context).await.0 as i64;
         let now = chrono::Utc::now().naive_utc();
 
         let [name, description, begin_at, end_at] =
@@ -178,7 +178,7 @@ impl DiscordHandler {
         interaction: &ApplicationCommandInteraction,
         option: &CommandDataOption,
     ) -> anyhow::Result<()> {
-        let channel_id = interaction.channel_id.get_parent_or_self(&context.cache).0 as i64;
+        let channel_id = interaction.channel_id.get_parent_or_self(&context).await.0 as i64;
         let now = chrono::Utc::now().naive_utc();
 
         let [id, name, description, begin_at, end_at] =
@@ -260,7 +260,7 @@ impl DiscordHandler {
         interaction: &ApplicationCommandInteraction,
         option: &CommandDataOption,
     ) -> anyhow::Result<()> {
-        let channel_id = interaction.channel_id.get_parent_or_self(&context.cache).0 as i64;
+        let channel_id = interaction.channel_id.get_parent_or_self(&context).await.0 as i64;
         let [id] = option.get_options(&["id"]);
         let id = unsafe {
             id.unwrap_unchecked()
@@ -299,7 +299,7 @@ impl DiscordHandler {
         context: &Context,
         interaction: &AutocompleteInteraction,
     ) -> anyhow::Result<()> {
-        let channel_id = interaction.channel_id.get_parent_or_self(&context.cache).0 as i64;
+        let channel_id = interaction.channel_id.get_parent_or_self(&context).await.0 as i64;
         let [id] = interaction.data.options.get_options(&["id"]);
         let name = id
             .and_then(|o| o.value.as_ref())
