@@ -467,9 +467,16 @@ impl<'r> FromRow<'r, SqliteRow> for Event {
     fn from_row(row: &'r SqliteRow) -> Result<Self, sqlx::Error> {
         let rowid = row.get_unchecked("rowid");
         let name = row.get_unchecked("name");
-        let created_at = chrono::NaiveDateTime::from_timestamp(row.get_unchecked("created_at"), 0);
-        let modified_at =
-            chrono::NaiveDateTime::from_timestamp(row.get_unchecked("modified_at"), 0);
+        let created_at = chrono::NaiveDateTime::parse_from_str(
+            row.get_unchecked("created_at"),
+            "%Y-%m-%d %H:%M:%S%.f",
+        )
+        .expect("Failed to parse created_at");
+        let modified_at = chrono::NaiveDateTime::parse_from_str(
+            row.get_unchecked("modified_at"),
+            "%Y-%m-%d %H:%M:%S%.f",
+        )
+        .expect("Failed to parse created_at");
         let description = row.get_unchecked("description");
         let begin_date = chrono::NaiveDate::parse_from_str(
             row.get_unchecked::<&str, _>("begin_date"),
