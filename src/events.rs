@@ -244,12 +244,12 @@ impl DiscordHandler {
         .execute(&self.db_pool)
         .await
         {
-            error!("Failed to update event - {e:?}");
+            error!("Failed to delete event - {e:?}");
         } else if let Err(e) = interaction
             .create_interaction_response(context, |r| {
                 r.kind(InteractionResponseType::ChannelMessageWithSource)
                     .interaction_response_data(|d| {
-                        d.content("이벤트가 갱신되었습니다.".to_string())
+                        d.content("이벤트가 삭제되었습니다.".to_string())
                     })
             })
             .await
@@ -389,10 +389,11 @@ impl SubApplication for DiscordHandler {
                     name: "delete",
                     description: "이벤트 삭제",
                     options: vec![ApplicationCommandOption {
-                        kind: ApplicationCommandOptionType::String,
+                        kind: ApplicationCommandOptionType::Integer,
                         name: "id",
                         description: "이벤트 id",
                         required: Some(true),
+                        autocomplete: Some(true),
                         ..Default::default()
                     }],
                     ..Default::default()
