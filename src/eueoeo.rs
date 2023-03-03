@@ -2,6 +2,7 @@ use anyhow::Context as _;
 use async_trait::async_trait;
 use chrono::{Datelike, FixedOffset, TimeZone};
 use log::{error, info, trace};
+use serde::Deserialize;
 use serenity::{
     builder::{CreateEmbed, CreateInteractionResponseData, CreateMessage},
     model::prelude::{
@@ -15,17 +16,59 @@ use serenity::{
 };
 use sqlx::SqlitePool;
 
-use crate::{application_command::*, from_snowflakes, IntoSnowflakes};
+use crate::discord::{
+    application_command::*, from_snowflakes, CommandDataOptionHelper, CommandHelper,
+    IntoSnowflakes, SubApplication,
+};
 
 const EUEOEO: &str = "으어어";
 const COMMAND_NAME: &str = "eueoeo";
 
 const MESSAGES_LIMIT: u64 = 100;
 
-pub struct Handler {
-    pub db_pool: SqlitePool,
-    pub init_message_id: MessageId,
-    pub channel_id: ChannelId,
+#[derive(Debug, Deserialize)]
+pub(crate) struct Config {
+    channel_id: u64,
+    init_message_id: u64,
+}
+
+pub struct DiscordHandler {
+    db_pool: SqlitePool,
+    init_message_id: MessageId,
+    channel_id: ChannelId,
+}
+
+impl DiscordHandler {
+    pub(crate) async fn new(db_pool: SqlitePool, config: &crate::Config) -> Self {
+        // Get last saved message_id from DB. If not exists, got 0.
+        let last_message_id = MessageId(
+            match sqlx::query!(
+                "SELECT message_id as `message_id:i64` FROM history order by message_id desc limit 1"
+            )
+            .fetch_one(&db_pool)
+            .await
+            {
+                Ok(row) => {
+                    let last_id = row.message_id as u64;
+                    info!("Previous last_message_id from db = {}", last_id);
+                    last_id
+                }
+                Err(e) => {
+                    info!("Failed to get last_id from db - {:?}", e);
+                    info!("Use last id from env config");
+                    let id: u64 = config.eueoeo.init_message_id;
+                    id
+                }
+            },
+        );
+        info!("Previous last_message_id = {}", last_message_id);
+
+        Self {
+            db_pool,
+            init_message_id: last_message_id,
+            channel_id: ChannelId(config.eueoeo.channel_id),
+        }
+    }
 }
 
 trait FutabaMessage {
@@ -183,6 +226,26 @@ enum MissingDays {
 
 impl MissingDays {
     const DETAIL_LIMIT_COUNT: i64 = 10;
+
+    fn render(&self) -> String {
+        match self {
+            MissingDays::Detailed(missing_days) => {
+                if missing_days.is_empty() {
+                    "없음".to_string()
+                } else {
+                    let all_missing_days = missing_days
+                        .iter()
+                        .map(|date| date.format("%m/%d").to_string())
+                        .collect::<Vec<_>>()
+                        .join(", ");
+                    format!("{}일 - {}", missing_days.len(), all_missing_days,)
+                }
+            }
+            MissingDays::Count(count) => {
+                format!("{}일", count)
+            }
+        }
+    }
 }
 
 struct UserDetail {
@@ -196,7 +259,7 @@ struct UserDetail {
     missing_days: MissingDays,
 }
 
-impl Handler {
+impl DiscordHandler {
     async fn incr_counter(&self, message: &Message) -> anyhow::Result<bool> {
         trace!("insert {}", &message.id);
         let message_id = *message.id.as_u64() as i64;
@@ -585,17 +648,8 @@ impl Handler {
         interaction: &ApplicationCommandInteraction,
         option: &CommandDataOption,
     ) -> serenity::Result<()> {
-        let year_arg = option
-            .options
-            .first()
-            .and_then(|opt| {
-                if let Some(v) = &opt.value {
-                    v.as_u64()
-                } else {
-                    None
-                }
-            })
-            .map(|v| v as i32);
+        let [year] = option.get_options(&["year"]);
+        let year_arg = year.as_i64().map(|v| v as i32);
         let (year, stats) = self.fetch_yearly_statistics(year_arg).await;
         interaction
             .create_interaction_response(&context.http, |r| {
@@ -617,11 +671,8 @@ impl Handler {
         interaction: &ApplicationCommandInteraction,
         option: &CommandDataOption,
     ) -> serenity::Result<()> {
-        let ranking_basis = unsafe {
-            let ranking_basis = option.options.first().unwrap_unchecked();
-            let ranking_basis = ranking_basis.value.as_ref().unwrap_unchecked();
-            ranking_basis.as_str().unwrap_unchecked()
-        };
+        let [ranking_basis] = option.get_options(&["type"]);
+        let ranking_basis = unsafe { ranking_basis.as_str_unchecked() };
         let (stat_name, streak_arg) = match ranking_basis {
             "current" => ("현재 연속", false),
             "longest" => ("최장 연속", true),
@@ -644,11 +695,11 @@ impl Handler {
         interaction: &ApplicationCommandInteraction,
         option: &CommandDataOption,
     ) -> serenity::Result<()> {
+        let [user_id] = option.get_options(&["user"]);
+
         let user_id: i64 = unsafe {
-            if let Some(user) = option.options.first() {
-                let user = user.value.as_ref().unwrap_unchecked();
-                let user = user.as_str().unwrap_unchecked();
-                user.parse().unwrap_unchecked()
+            if let Some(user) = user_id {
+                user.as_str_unchecked().parse().unwrap_unchecked()
             } else {
                 *interaction
                     .member
@@ -701,28 +752,7 @@ impl Handler {
                                 )
                                 .field(
                                     format!("빼먹은 날 ({}년)", user_detail.year),
-                                    match user_detail.missing_days {
-                                        MissingDays::Detailed(missing_days) => {
-                                            if missing_days.is_empty() {
-                                                "없음".to_string()
-                                            } else {
-                                                format!(
-                                                    "{}일 - {}",
-                                                    missing_days.len(),
-                                                    missing_days
-                                                        .iter()
-                                                        .map(|date| {
-                                                            date.format("%m/%d").to_string()
-                                                        })
-                                                        .collect::<Vec<_>>()
-                                                        .join(", ")
-                                                )
-                                            }
-                                        }
-                                        MissingDays::Count(count) => {
-                                            format!("{}일", count)
-                                        }
-                                    },
+                                    user_detail.missing_days.render(),
                                     false,
                                 )
                         })
@@ -748,7 +778,7 @@ impl Handler {
 }
 
 #[async_trait]
-impl super::SubApplication for Handler {
+impl SubApplication for DiscordHandler {
     async fn update_member(&self, member: &Member) -> anyhow::Result<()> {
         // if there is no nickname, use member's name
         let name = member.nick.as_ref().unwrap_or(&member.user.name).clone();
@@ -790,23 +820,18 @@ impl super::SubApplication for Handler {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "year",
                     description: "yearly count",
-                    required: None,
-                    choices: vec![],
                     options: vec![ApplicationCommandOption {
                         kind: ApplicationCommandOptionType::Integer,
                         name: "year",
                         description: "default is current year.",
-                        required: Some(false),
-                        choices: vec![],
-                        options: vec![],
+                        ..Default::default()
                     }],
+                    ..Default::default()
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "streaks",
                     description: "streaks ranking",
-                    required: None,
-                    choices: vec![],
                     options: vec![ApplicationCommandOption {
                         kind: ApplicationCommandOptionType::String,
                         name: "type",
@@ -822,31 +847,27 @@ impl super::SubApplication for Handler {
                                 value: serde_json::json!("longest"),
                             },
                         ],
-                        options: vec![],
+                        ..Default::default()
                     }],
+                    ..Default::default()
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "user",
                     description: "user detail",
-                    required: None,
-                    choices: vec![],
                     options: vec![ApplicationCommandOption {
                         kind: ApplicationCommandOptionType::User,
                         name: "user",
                         description: "If not specified, show details of you",
-                        required: Some(false),
-                        choices: vec![],
-                        options: vec![],
+                        ..Default::default()
                     }],
+                    ..Default::default()
                 },
                 ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::SubCommand,
                     name: "total",
                     description: "total ranking",
-                    required: None,
-                    choices: vec![],
-                    options: vec![],
+                    ..Default::default()
                 },
             ],
         };
