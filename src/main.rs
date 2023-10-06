@@ -7,6 +7,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 mod discord;
 mod eueoeo;
 mod events;
+mod user;
 mod web;
 
 #[derive(Debug, Deserialize)]

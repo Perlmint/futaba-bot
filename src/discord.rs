@@ -28,6 +28,7 @@ pub mod application_command;
 
 use crate::eueoeo::DiscordHandler as EueoeoHandler;
 use crate::events::DiscordHandler as EventsHandler;
+use crate::user::DiscordHandler as UserHandler;
 
 #[async_trait]
 pub trait SubApplication {
@@ -57,6 +58,7 @@ pub trait SubApplication {
 struct Handler {
     eueoeo: EueoeoHandler,
     calendar: EventsHandler,
+    user: UserHandler,
     guild_id: GuildId,
 }
 
@@ -284,7 +286,14 @@ impl EventHandler for Handler {
                 {
                     return;
                 }
-                self.calendar
+                if self
+                    .calendar
+                    .application_command_interaction_create(&context, &interaction)
+                    .await
+                {
+                    return;
+                }
+                self.user
                     .application_command_interaction_create(&context, &interaction)
                     .await;
             }
@@ -332,6 +341,7 @@ pub(crate) async fn start(
         guild_id: GuildId(guild_id),
         eueoeo: EueoeoHandler::new(db_pool.clone(), config).await,
         calendar: EventsHandler::new(db_pool.clone(), config),
+        user: UserHandler::new(db_pool.clone()),
     })
     .await?;
 
