@@ -22,13 +22,8 @@ use serenity::{
     },
     Client,
 };
-use sqlx::SqlitePool;
 
 pub mod application_command;
-
-use crate::eueoeo::DiscordHandler as EueoeoHandler;
-use crate::events::DiscordHandler as EventsHandler;
-use crate::user::DiscordHandler as UserHandler;
 
 #[async_trait]
 pub trait SubApplication {
@@ -56,9 +51,7 @@ pub trait SubApplication {
 }
 
 struct Handler {
-    eueoeo: EueoeoHandler,
-    calendar: EventsHandler,
-    user: UserHandler,
+    applications: Vec<Box<dyn SubApplication + Send + Sync>>,
     guild_id: GuildId,
 }
 
@@ -218,10 +211,12 @@ impl EventHandler for Handler {
                     if largest_user_id.unwrap_or_else(|| 0.into()) < member.user.id {
                         largest_user_id = Some(member.user.id);
                     }
-                    self.eueoeo
-                        .update_member(&member)
-                        .await
-                        .expect("Failed to update member");
+
+                    for app in &self.applications {
+                        app.update_member(&member)
+                            .await
+                            .expect("Failed to update member");
+                    }
                 }
 
                 if largest_user_id.is_none() {
@@ -235,22 +230,26 @@ impl EventHandler for Handler {
     }
 
     async fn resume(&self, context: Context, _: ResumedEvent) {
-        self.eueoeo.resume(&context).await;
+        for app in &self.applications {
+            app.resume(&context).await;
+        }
     }
 
     // on connected to discord
     async fn ready(&self, ctx: Context, _data_about_bot: Ready) {
-        self.eueoeo.ready(&ctx, self.guild_id).await;
-        self.calendar.ready(&ctx, self.guild_id).await;
+        for app in &self.applications {
+            app.ready(&ctx, self.guild_id).await;
+        }
 
         info!("ready");
     }
 
     async fn guild_member_addition(&self, _: Context, new_member: Member) {
-        self.eueoeo
-            .update_member(&new_member)
-            .await
-            .expect("Failed to update member");
+        for app in &self.applications {
+            app.update_member(&new_member)
+                .await
+                .expect("Failed to update member");
+        }
     }
 
     // run on any message event
@@ -263,7 +262,9 @@ impl EventHandler for Handler {
             return;
         }
 
-        self.eueoeo.message(&ctx, &message).await;
+        for app in &self.applications {
+            app.message(&ctx, &message).await;
+        }
     }
 
     // run on firing slash command
@@ -279,23 +280,14 @@ impl EventHandler for Handler {
                     return;
                 }
 
-                if self
-                    .eueoeo
-                    .application_command_interaction_create(&context, &interaction)
-                    .await
-                {
-                    return;
+                for app in &self.applications {
+                    if app
+                        .application_command_interaction_create(&context, &interaction)
+                        .await
+                    {
+                        return;
+                    }
                 }
-                if self
-                    .calendar
-                    .application_command_interaction_create(&context, &interaction)
-                    .await
-                {
-                    return;
-                }
-                self.user
-                    .application_command_interaction_create(&context, &interaction)
-                    .await;
             }
             InteractionType::Autocomplete => {
                 let autocomplete = if let Some(autocomplete) = interaction.autocomplete() {
@@ -304,7 +296,9 @@ impl EventHandler for Handler {
                     return;
                 };
 
-                self.calendar.autocomplete(&context, &autocomplete).await;
+                for app in &self.applications {
+                    app.autocomplete(&context, &autocomplete).await;
+                }
             }
             _ => {}
         }
@@ -319,8 +313,8 @@ pub(crate) struct Config {
 }
 
 pub(crate) async fn start(
-    db_pool: SqlitePool,
     config: &super::Config,
+    sub_applications: Vec<Box<dyn SubApplication + Send + Sync>>,
     mut stop_signal: tokio::sync::broadcast::Receiver<()>,
 ) -> anyhow::Result<()> {
     let token = &config.discord.token;
@@ -339,9 +333,7 @@ pub(crate) async fn start(
     .application_id(application_id)
     .event_handler(Handler {
         guild_id: GuildId(guild_id),
-        eueoeo: EueoeoHandler::new(db_pool.clone(), config).await,
-        calendar: EventsHandler::new(db_pool.clone(), config),
-        user: UserHandler::new(db_pool.clone()),
+        applications: sub_applications,
     })
     .await?;
 

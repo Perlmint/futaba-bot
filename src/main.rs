@@ -45,7 +45,20 @@ async fn main() -> anyhow::Result<()> {
         let stop_sender = stop_sender.clone();
         let config = config.clone();
         async move {
-            if let Err(e) = discord::start(db_pool, &config, stop_receiver).await {
+            type BoxedHandler = Box<dyn discord::SubApplication + Send + Sync>;
+            if let Err(e) = discord::start(
+                &config,
+                IntoIterator::into_iter([
+                    Box::new(eueoeo::DiscordHandler::new(db_pool.clone(), &config).await)
+                        as BoxedHandler,
+                    Box::new(events::DiscordHandler::new(db_pool.clone(), &config)) as BoxedHandler,
+                    Box::new(user::DiscordHandler::new(db_pool.clone())) as BoxedHandler,
+                ])
+                .collect(),
+                stop_receiver,
+            )
+            .await
+            {
                 error!("Discord task failed with - {e:?}");
                 let _ = stop_sender.send(());
             }
