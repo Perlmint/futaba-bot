@@ -7,8 +7,17 @@ use sqlx::sqlite::SqlitePoolOptions;
 mod discord;
 mod eueoeo;
 mod events;
+mod link_rewriter;
 mod user;
 mod web;
+
+#[macro_export]
+macro_rules! regex {
+    ($regex:literal) => {{
+        static REGEX: once_cell::sync::OnceCell<regex::Regex> = once_cell::sync::OnceCell::new();
+        REGEX.get_or_init(|| regex::Regex::new($regex).unwrap())
+    }};
+}
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct Config {
@@ -53,6 +62,7 @@ async fn main() -> anyhow::Result<()> {
                         as BoxedHandler,
                     Box::new(events::DiscordHandler::new(db_pool.clone(), &config)) as BoxedHandler,
                     Box::new(user::DiscordHandler::new(db_pool.clone())) as BoxedHandler,
+                    Box::new(link_rewriter::DiscordHandler::new()) as BoxedHandler,
                 ])
                 .collect(),
                 stop_receiver,
