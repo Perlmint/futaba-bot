@@ -25,6 +25,7 @@ const EUEOEO: &str = "으어어";
 const COMMAND_NAME: &str = "eueoeo";
 
 const MESSAGES_LIMIT: u64 = 100;
+const MAX_RESPONSE_COUNT: usize = 25;
 
 #[derive(Debug, Deserialize)]
 pub(crate) struct Config {
@@ -655,7 +656,7 @@ impl DiscordHandler {
             .create_interaction_response(&context.http, |r| {
                 r.kind(InteractionResponseType::ChannelMessageWithSource)
                     .interaction_response_data(|d| {
-                        let stat_iter = stats.iter();
+                        let stat_iter = stats.iter().take(MAX_RESPONSE_COUNT);
                         d.create_statistics(
                             &format!("으어어 {} ({}일)", year, stats.total_days),
                             stat_iter,
@@ -771,7 +772,9 @@ impl DiscordHandler {
         interaction
             .create_interaction_response(&context.http, |r| {
                 r.kind(InteractionResponseType::ChannelMessageWithSource)
-                    .interaction_response_data(|d| d.create_statistics("으어어", stats.iter()))
+                    .interaction_response_data(|d| {
+                        d.create_statistics("으어어", stats.iter().take(MAX_RESPONSE_COUNT))
+                    })
             })
             .await
     }
