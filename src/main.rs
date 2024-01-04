@@ -23,7 +23,9 @@ macro_rules! regex {
 pub(crate) struct Config {
     discord: discord::Config,
     web: web::Config,
+    events: events::Config,
     eueoeo: eueoeo::Config,
+    google_service_account_path: String,
 }
 
 #[tokio::main]
@@ -60,7 +62,11 @@ async fn main() -> anyhow::Result<()> {
                 IntoIterator::into_iter([
                     Box::new(eueoeo::DiscordHandler::new(db_pool.clone(), &config).await)
                         as BoxedHandler,
-                    Box::new(events::DiscordHandler::new(db_pool.clone(), &config)) as BoxedHandler,
+                    Box::new(
+                        events::DiscordHandler::new(db_pool.clone(), &config)
+                            .await
+                            .unwrap(),
+                    ) as BoxedHandler,
                     Box::new(user::DiscordHandler::new(db_pool.clone())) as BoxedHandler,
                     Box::new(link_rewriter::DiscordHandler::new()) as BoxedHandler,
                 ])
