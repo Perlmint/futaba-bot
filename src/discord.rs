@@ -17,13 +17,22 @@ use serenity::{
                 application_command::{ApplicationCommandInteraction, CommandDataOption},
                 autocomplete::AutocompleteInteraction,
             },
-            Channel, Ready, ResumedEvent,
+            Channel, GuildScheduledEventUserAddEvent, GuildScheduledEventUserRemoveEvent, Ready,
+            ResumedEvent, ScheduledEvent,
         },
     },
     Client,
 };
 
 pub mod application_command;
+
+pub enum ScheduledEventUpdated<'a> {
+    Created(&'a ScheduledEvent),
+    Updated(&'a ScheduledEvent),
+    Deleted(&'a ScheduledEvent),
+    UserAdded(&'a GuildScheduledEventUserAddEvent),
+    UserRemoved(&'a GuildScheduledEventUserRemoveEvent),
+}
 
 #[async_trait]
 pub trait SubApplication {
@@ -48,6 +57,7 @@ pub trait SubApplication {
     async fn update_member(&self, _member: &Member) -> anyhow::Result<()> {
         Ok(())
     }
+    async fn guild_scheduled_event(&self, _context: &Context, _event: ScheduledEventUpdated<'_>) {}
 }
 
 struct Handler {
@@ -303,6 +313,51 @@ impl EventHandler for Handler {
             _ => {}
         }
     }
+
+    async fn guild_scheduled_event_create(&self, context: Context, event: ScheduledEvent) {
+        for sub_app in &self.applications {
+            sub_app
+                .guild_scheduled_event(&context, ScheduledEventUpdated::Created(&event))
+                .await;
+        }
+    }
+    async fn guild_scheduled_event_update(&self, context: Context, event: ScheduledEvent) {
+        for sub_app in &self.applications {
+            sub_app
+                .guild_scheduled_event(&context, ScheduledEventUpdated::Updated(&event))
+                .await;
+        }
+    }
+    async fn guild_scheduled_event_delete(&self, context: Context, event: ScheduledEvent) {
+        for sub_app in &self.applications {
+            sub_app
+                .guild_scheduled_event(&context, ScheduledEventUpdated::Deleted(&event))
+                .await;
+        }
+    }
+
+    async fn guild_scheduled_event_user_add(
+        &self,
+        context: Context,
+        subscribed: GuildScheduledEventUserAddEvent,
+    ) {
+        for sub_app in &self.applications {
+            sub_app
+                .guild_scheduled_event(&context, ScheduledEventUpdated::UserAdded(&subscribed))
+                .await;
+        }
+    }
+    async fn guild_scheduled_event_user_remove(
+        &self,
+        context: Context,
+        unsubscribed: GuildScheduledEventUserRemoveEvent,
+    ) {
+        for sub_app in &self.applications {
+            sub_app
+                .guild_scheduled_event(&context, ScheduledEventUpdated::UserRemoved(&unsubscribed))
+                .await;
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -328,7 +383,8 @@ pub(crate) async fn start(
             | GatewayIntents::GUILD_MEMBERS
             | GatewayIntents::GUILD_MESSAGES
             | GatewayIntents::GUILD_PRESENCES
-            | GatewayIntents::MESSAGE_CONTENT,
+            | GatewayIntents::MESSAGE_CONTENT
+            | GatewayIntents::GUILD_SCHEDULED_EVENTS,
     )
     .application_id(application_id)
     .event_handler(Handler {
