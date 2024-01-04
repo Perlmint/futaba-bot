@@ -7,11 +7,11 @@ use serenity::{
             application_command::{ApplicationCommandInteraction, CommandDataOption},
             InteractionResponseType,
         },
-        GuildId,
+        GuildId, UserId,
     },
     prelude::Context,
 };
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 use crate::discord::{
     application_command::{
@@ -28,9 +28,7 @@ const COMMAND_NAME: &str = "user";
 
 impl DiscordHandler {
     pub fn new(db_pool: SqlitePool) -> Self {
-        Self {
-            db_pool,
-        }
+        Self { db_pool }
     }
     async fn handle_google_command(
         &self,
@@ -67,6 +65,40 @@ impl DiscordHandler {
 
         Ok(())
     }
+
+    pub async fn get_google_id(db: &SqlitePool, user_id: UserId) -> anyhow::Result<Option<String>> {
+        let user_id = *user_id.as_u64() as i64;
+        let ret = sqlx::query!(
+            "SELECT `google_email` FROM `users` WHERE `user_id` = ?",
+            user_id
+        )
+        .fetch_optional(db)
+        .await?;
+
+        Ok(ret.and_then(|d| d.google_email))
+    }
+
+    pub async fn get_google_ids(
+        db: &SqlitePool,
+        user_ids: impl Iterator<Item = UserId>,
+    ) -> anyhow::Result<Vec<String>> {
+        let mut builder =
+            sqlx::QueryBuilder::new("SELECT `google_email` FROM `users` WHERE `user_id` IN ");
+        let mut users = builder.separated(",");
+        users.push_unseparated("(");
+        for user_id in user_ids {
+            users.push(*user_id.as_u64() as i64);
+        }
+        users.push_unseparated(")");
+
+        Ok(builder
+            .build()
+            .fetch_all(db)
+            .await?
+            .into_iter()
+            .map(|record| record.get::<'_, String, _>(0))
+            .collect())
+    }
 }
 
 #[async_trait]
@@ -82,7 +114,7 @@ impl SubApplication for DiscordHandler {
                 description: "link google id",
                 options: vec![ApplicationCommandOption {
                     kind: ApplicationCommandOptionType::String,
-                    name: "google id",
+                    name: "google_id",
                     required: Some(true),
                     description: "google id",
                     ..Default::default()
