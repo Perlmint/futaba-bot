@@ -1,8 +1,8 @@
 use anyhow::Context as _;
 use async_trait::async_trait;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, Utc};
+use chrono::NaiveDateTime;
 use google_calendar3::{
-    api::{AclRule, Event as GoogleEvent},
+    api::Event as GoogleEvent,
     hyper::{self, client::HttpConnector},
     hyper_rustls::{self, HttpsConnector},
     oauth2::{self, authenticator::HyperClientBuilder},
@@ -14,7 +14,7 @@ use serenity::{
     model::prelude::{GuildId, ScheduledEvent, ScheduledEventId, UserId},
     prelude::Context,
 };
-use sqlx::{query, sqlite::SqliteRow, FromRow, Row, SqlitePool};
+use sqlx::SqlitePool;
 
 use super::user::DiscordHandler as UserHandler;
 use crate::discord::{ScheduledEventUpdated, SubApplication};
@@ -22,6 +22,7 @@ use crate::discord::{ScheduledEventUpdated, SubApplication};
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct Config {
     calendar_id: String,
+    google_service_account_path: String,
 }
 
 pub(crate) struct DiscordHandler {
@@ -35,7 +36,7 @@ impl DiscordHandler {
         Ok(Self {
             db_pool,
             service_account: google_calendar3::oauth2::read_service_account_key(
-                &config.google_service_account_path,
+                &config.events.google_service_account_path,
             )
             .await?,
             config: config.events.clone(),
