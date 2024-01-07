@@ -1,17 +1,26 @@
 use anyhow::Context as _;
 use async_trait::async_trait;
 use log::error;
+use serde::Deserialize;
 use serenity::{
-    model::prelude::{
-        interaction::{
-            application_command::{ApplicationCommandInteraction, CommandDataOption},
-            InteractionResponseType,
+    model::{
+        application::{
+            component::{ButtonStyle, InputTextStyle},
+            interaction::MessageFlags,
         },
-        GuildId, UserId,
+        prelude::{
+            interaction::{
+                application_command::{ApplicationCommandInteraction, CommandDataOption},
+                InteractionResponseType,
+            },
+            GuildId, UserId,
+        },
     },
     prelude::Context,
 };
 use sqlx::{Row, SqlitePool};
+
+mod google;
 
 use crate::discord::{
     application_command::{
@@ -20,16 +29,33 @@ use crate::discord::{
     SubApplication,
 };
 
+use self::google::GoogleUserHandler;
+
+#[derive(Debug, Deserialize, Clone)]
+pub(crate) struct Config {
+    google_oauth_secret_path: String,
+    redirect_prefix: String,
+}
+
 pub struct DiscordHandler {
     db_pool: SqlitePool,
+    google: GoogleUserHandler,
 }
 
 const COMMAND_NAME: &str = "user";
 
 impl DiscordHandler {
-    pub fn new(db_pool: SqlitePool) -> Self {
-        Self { db_pool }
+    pub async fn new(db_pool: SqlitePool, config: &super::Config) -> Self {
+        Self {
+            db_pool,
+            google: GoogleUserHandler::new(
+                &config.user.google_oauth_secret_path,
+                &config.user.redirect_prefix,
+            )
+            .await,
+        }
     }
+
     async fn handle_google_command(
         &self,
         context: &Context,
@@ -37,28 +63,22 @@ impl DiscordHandler {
         option: &CommandDataOption,
     ) -> anyhow::Result<()> {
         let user_id = *interaction.user.id.as_u64() as i64;
-        let google_email = option
-            .options
-            .first()
-            .unwrap()
-            .value
-            .as_ref()
-            .unwrap()
-            .as_str()
-            .unwrap();
-        sqlx::query!(
-            "UPDATE `users` SET `google_email` = ? WHERE `user_id` = ?",
-            google_email,
-            user_id
-        )
-        .execute(&self.db_pool)
-        .await
-        .context("Failed to store google email to DB")?;
+
+        let url = self.google.auth(user_id, self.db_pool.clone()).await?;
 
         interaction
-            .create_interaction_response(context, |f| {
-                f.kind(InteractionResponseType::ChannelMessageWithSource)
-                    .interaction_response_data(|f| f.content("Google email registered"))
+            .create_interaction_response(context, |c| {
+                c.kind(InteractionResponseType::ChannelMessageWithSource)
+                    .interaction_response_data(|c| {
+                        c.components(|c| {
+                            c.create_action_row(|c| {
+                                c.create_button(|c| {
+                                    c.label("Login").style(ButtonStyle::Link).url(url.0)
+                                })
+                            })
+                        })
+                        .flags(MessageFlags::EPHEMERAL)
+                    })
             })
             .await
             .context("Failed to send interaction response")?;
@@ -112,13 +132,6 @@ impl SubApplication for DiscordHandler {
                 kind: ApplicationCommandOptionType::SubCommand,
                 name: "google",
                 description: "link google id",
-                options: vec![ApplicationCommandOption {
-                    kind: ApplicationCommandOptionType::String,
-                    name: "google_id",
-                    required: Some(true),
-                    description: "google id",
-                    ..Default::default()
-                }],
                 ..Default::default()
             }],
         };
@@ -155,4 +168,8 @@ impl SubApplication for DiscordHandler {
 
         true
     }
+}
+
+pub fn web_router<S: Sync + Send + Clone + 'static>() -> axum::Router<S> {
+    axum::Router::new().nest("/google", google::web_router())
 }

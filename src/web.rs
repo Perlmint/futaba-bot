@@ -31,18 +31,22 @@ pub(crate) async fn start(
 
     let router = axum::Router::new()
         .route("/", get(root))
-        .nest("/events", super::events::router())
+        .nest("/user", crate::user::web_router())
         .layer(Extension(db_pool))
         .layer(Extension(config.clone()));
 
-    info!("Serve web on {}:{port}", config.web.domain);
+    info!("Serve web on {port}");
 
-    axum::Server::bind(&SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port).into())
-        .serve(router.into_make_service())
-        .with_graceful_shutdown(async {
-            let _ = stop_signal.recv().await;
-        })
-        .await?;
+    axum::serve(
+        tokio::net::TcpListener::bind(SocketAddrV4::new(Ipv4Addr::UNSPECIFIED, port))
+            .await
+            .unwrap(),
+        router.into_make_service(),
+    )
+    .with_graceful_shutdown(async move {
+        let _ = stop_signal.recv().await;
+    })
+    .await?;
 
     Ok(())
 }

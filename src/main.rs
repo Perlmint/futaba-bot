@@ -7,6 +7,7 @@ use sqlx::sqlite::SqlitePoolOptions;
 mod discord;
 mod eueoeo;
 mod events;
+pub(crate) mod jwt_util;
 mod link_rewriter;
 mod user;
 mod web;
@@ -25,7 +26,7 @@ pub(crate) struct Config {
     web: web::Config,
     events: events::Config,
     eueoeo: eueoeo::Config,
-    google_service_account_path: String,
+    user: user::Config,
 }
 
 #[tokio::main]
@@ -67,7 +68,13 @@ async fn main() -> anyhow::Result<()> {
                             .await
                             .unwrap(),
                     ) as BoxedHandler,
-                    Box::new(user::DiscordHandler::new(db_pool.clone())) as BoxedHandler,
+                    Box::new(
+                        user::DiscordHandler::new(
+                            db_pool.clone(),
+                            &config,
+                        )
+                        .await,
+                    ) as BoxedHandler,
                     Box::new(link_rewriter::DiscordHandler::new()) as BoxedHandler,
                 ])
                 .collect(),
