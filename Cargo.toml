@@ -6,20 +6,33 @@ edition = "2018"
 
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
+[features]
+default = ["google_link"]
+google_link = ["sha2", "rsa", "jwt", "hmac"]
+
 [dependencies]
 anyhow = "1.0"
 async-trait = "0.1"
 axum = "0.7.3"
 base64-url = "2.0.2"
 chrono = "0.4"
+dashmap = "5.5.3"
 futures = "0.3"
+google-calendar3 = "5.0.2"
+hmac = { version = "0.12.1", optional = true }
+jwt = { version = "0.16.0", optional = true }
+log = { version = "^0.4" }
 once_cell = "1.7"
 pretty_env_logger = { version = "^0.5" }
 regex = "1.10.2"
+reqwest = "0.11.23"
+rsa = { version = "0.9.6", optional = true }
 serde = { version = "*", features = ["serde_derive"] }
 serde_json = { version = "1.0" }
 serde_repr = "0.1"
 serenity = { version = "0.11.6", default-features = false, features = ["builder", "client", "cache", "chrono", "gateway", "model", "rustls_backend", "unstable_discord_api"] }
+sha2 = { version = "0.10.8", optional = true, features = ["oid"] }
 sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"] }
 tokio = { version = "1.2", features = ["rt-multi-thread", "macros", "signal"] }
 toml = "0.8.8"
+uuid = { version = "1.6.1", features = ["v4", "serde"] }
