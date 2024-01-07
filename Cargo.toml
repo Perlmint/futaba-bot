@@ -7,19 +7,19 @@ edition = "2018"
 # See more keys and their definitions at https://doc.rust-lang.org/cargo/reference/manifest.html
 
 [dependencies]
-anyhow = "*"
-async-trait = "*"
-chrono = "*"
+anyhow = "1.0"
+async-trait = "0.1"
+axum = "0.7.3"
+base64-url = "2.0.2"
+chrono = "0.4"
+futures = "0.3"
 once_cell = "1.7"
-futures = "*"
+pretty_env_logger = { version = "^0.5" }
+regex = "1.10.2"
 serde = { version = "*", features = ["serde_derive"] }
-serde_json = { version = "1.0.63" }
+serde_json = { version = "1.0" }
 serde_repr = "0.1"
-serenity = { version = "0.11.4", default-features = false, features = ["builder", "client", "cache", "chrono", "gateway", "model", "rustls_backend", "unstable_discord_api"] }
-sqlx = { version = "0.6", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"] }
+serenity = { version = "0.11.6", default-features = false, features = ["builder", "client", "cache", "chrono", "gateway", "model", "rustls_backend", "unstable_discord_api"] }
+sqlx = { version = "0.7", default-features = false, features = ["runtime-tokio-rustls", "sqlite", "macros", "migrate", "chrono"] }
 tokio = { version = "1.2", features = ["rt-multi-thread", "macros", "signal"] }
-log = { version = "^0.4" }
-pretty_env_logger = { version = "^0.4" }
-axum = "0.6.8"
-ics = "0.5.8"
-toml = "0.7.2"
+toml = "0.8.8"
