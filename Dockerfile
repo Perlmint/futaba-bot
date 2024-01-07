@@ -5,7 +5,9 @@ WORKDIR /ws
 RUN apk add --no-cache \
     musl-dev \
     ca-certificates \
-    openssl-dev
+    openssl-dev \
+    openssl-libs-static && \
+    update-ca-certificates
 
 RUN cargo install sqlx-cli --no-default-features --features sqlite,sqlx/runtime-tokio-rustls 
 

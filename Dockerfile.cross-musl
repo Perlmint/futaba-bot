@@ -6,9 +6,11 @@ ARG BUILD_ARCH
 
 RUN apk add --no-cache \
     musl-dev \
-    curl \
     ca-certificates \
-    openssl-dev
+    openssl-dev \
+    openssl-libs-static && \
+    update-ca-certificates
+
 RUN rustup target add ${BUILD_ARCH}-unknown-linux-musl
 RUN curl https://musl.cc/${BUILD_ARCH}-linux-musl-cross.tgz -o ${BUILD_ARCH}-linux-musl-cross.tgz && \
     tar -xzf ${BUILD_ARCH}-linux-musl-cross.tgz && \
