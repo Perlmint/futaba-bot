@@ -85,10 +85,13 @@ impl IntoSnowflakes for Duration {
 }
 
 pub fn from_snowflakes<TZ: TimeZone>(tz: &TZ, snowflakes: i64) -> chrono::DateTime<TZ> {
-    tz.from_utc_datetime(&chrono::NaiveDateTime::from_timestamp(
-        ((snowflakes >> 22) + 1420070400000i64) / 1000,
-        0,
-    ))
+    tz.from_utc_datetime(
+        &chrono::NaiveDateTime::from_timestamp_opt(
+            ((snowflakes >> 22) + 1420070400000i64) / 1000,
+            0,
+        )
+        .unwrap(),
+    )
 }
 
 pub trait CommandHelper {

@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use async_trait::async_trait;
-use chrono::{Datelike, FixedOffset, TimeZone};
+use chrono::{Datelike, FixedOffset, TimeZone, Timelike};
 use log::{error, info, trace};
 use serde::Deserialize;
 use serenity::{
@@ -85,8 +85,8 @@ impl FutabaMessage for Message {
 
         let date = self
             .timestamp
-            .with_timezone(&chrono::FixedOffset::east(9 * 3600))
-            .date();
+            .with_timezone(&chrono::FixedOffset::east_opt(9 * 3600).unwrap())
+            .date_naive();
         if date.month() == 4 && date.day() == 1 {
             true
         } else {
@@ -221,7 +221,7 @@ impl<'a> EmendableMessage for CreateMessage<'a> {
 }
 
 enum MissingDays {
-    Detailed(Vec<chrono::Date<chrono::FixedOffset>>),
+    Detailed(Vec<chrono::NaiveDate>),
     Count(i64),
 }
 
@@ -265,10 +265,15 @@ impl DiscordHandler {
         trace!("insert {}", &message.id);
         let message_id = *message.id.as_u64() as i64;
         let author_id = *message.author.id.as_u64() as i64;
-        let offset = FixedOffset::east(9 * 3600);
-        let message_date = message.timestamp.with_timezone(&offset).date();
-        let prev_date = message_date.pred().and_hms(0, 0, 0).timestamp();
-        let message_date = message_date.and_hms(0, 0, 0).timestamp();
+        let offset = FixedOffset::east_opt(9 * 3600).unwrap();
+        let message_date = message.timestamp.with_timezone(&offset).date_naive();
+        let prev_date = message_date
+            .pred_opt()
+            .unwrap()
+            .and_hms_opt(0, 0, 0)
+            .unwrap()
+            .timestamp();
+        let message_date = message_date.and_hms_opt(0, 0, 0).unwrap().timestamp();
         let affected = match sqlx::query!(
             "INSERT INTO history (message_id, user_id, date) VALUES (?, ?, ?)",
             message_id,
@@ -355,7 +360,7 @@ impl DiscordHandler {
     }
 
     fn basis_offset() -> FixedOffset {
-        FixedOffset::east(9 * 3600)
+        FixedOffset::east_opt(9 * 3600).unwrap()
     }
 
     fn get_yearly_stats_range(year: Option<i32>) -> (i32, i64, i64, i64) {
@@ -363,11 +368,24 @@ impl DiscordHandler {
         let now = chrono::Local::now();
         let current_year = now.year();
         let year = year.unwrap_or(current_year);
-        let begin_date = offset.ymd(year, 1, 1).and_hms(0, 0, 0);
+        let begin_date = offset
+            .with_ymd_and_hms(year, 1, 1, 0, 0, 0)
+            .latest()
+            .unwrap();
         let end_date = if year != current_year {
-            offset.ymd(year + 1, 1, 1).and_hms(0, 0, 0)
+            offset
+                .with_ymd_and_hms(year + 1, 1, 1, 0, 0, 0)
+                .latest()
+                .unwrap()
         } else {
-            now.with_timezone(&offset).date().and_hms(0, 0, 0) + chrono::Duration::days(1)
+            now.with_timezone(&offset)
+                .with_hour(0)
+                .unwrap()
+                .with_minute(0)
+                .unwrap()
+                .with_second(0)
+                .unwrap()
+                + chrono::Duration::days(1)
         };
         let days = (end_date - begin_date).num_days();
         let begin_date_snowflakes = begin_date.into_snowflakes();
@@ -381,14 +399,14 @@ impl DiscordHandler {
     }
 
     fn get_current_streak_range() -> (i64, i64) {
-        let offset = FixedOffset::east(9 * 3600);
-        let now = chrono::Local::now().with_timezone(&offset).date();
-        let begin = now.pred();
-        let end = now.succ();
+        let offset = FixedOffset::east_opt(9 * 3600).unwrap();
+        let now = chrono::Local::now().with_timezone(&offset).date_naive();
+        let begin = now.pred_opt().unwrap();
+        let end = now.succ_opt().unwrap();
         info!("current streak range at {}: {} ~ {}", now, begin, end);
         (
-            begin.and_hms(0, 0, 0).timestamp(),
-            end.and_hms(0, 0, 0).timestamp(),
+            begin.and_hms_opt(0, 0, 0).unwrap().timestamp(),
+            end.and_hms_opt(0, 0, 0).unwrap().timestamp(),
         )
     }
 
@@ -419,7 +437,7 @@ impl DiscordHandler {
         // order by is not works correctly.
         let mut stats = stats
             .into_iter()
-            .map(|stat| (stat.name, stat.count.unwrap()))
+            .map(|stat| (stat.name, stat.count))
             .collect::<Vec<_>>();
 
         stats.sort_by_cached_key(|i| i.1);
@@ -520,7 +538,7 @@ impl DiscordHandler {
         let missing_count = days - yearly_count;
         let missing_days = if missing_count < MissingDays::DETAIL_LIMIT_COUNT {
             MissingDays::Detailed({
-                let offset = FixedOffset::east(9 * 3600);
+                let offset = FixedOffset::east_opt(9 * 3600).unwrap();
                 let single_day_snowflakes_delta = chrono::Duration::days(1).into_snowflakes();
                 let mut date_cursor_0 = begin_date_snowflakes;
                 let mut date_cursor_1 = date_cursor_0 + single_day_snowflakes_delta;
@@ -528,7 +546,7 @@ impl DiscordHandler {
                 for item in &history {
                     while item.message_id >= date_cursor_0 {
                         if item.message_id > date_cursor_1 {
-                            ret.push(from_snowflakes(&offset, date_cursor_0).date());
+                            ret.push(from_snowflakes(&offset, date_cursor_0).date_naive());
                         }
                         date_cursor_0 = date_cursor_1;
                         date_cursor_1 += single_day_snowflakes_delta;
@@ -719,10 +737,9 @@ impl DiscordHandler {
             );
             let member = unsafe { member.unwrap_unchecked() };
             unsafe { member.joined_at.unwrap_unchecked() }
-        }
-        .date();
-        let user_joined_at = chrono::Local.from_utc_date(&user_joined_at.naive_utc());
-        let total_days = (chrono::Local::today() - user_joined_at).num_days();
+        };
+        let user_joined_at = chrono::Local.from_utc_datetime(&user_joined_at.naive_utc());
+        let total_days = (chrono::Local::now() - user_joined_at).num_days();
         let user_detail = self.fetch_user_details(user_id).await;
 
         interaction
