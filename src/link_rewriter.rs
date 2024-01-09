@@ -17,7 +17,7 @@ impl DiscordHandler {
 impl SubApplication for DiscordHandler {
     async fn message(&self, context: &Context, message: &Message) {
         let Cow::Owned(replaced_text) =
-            regex!("://(x|twitter)\\.com/([^/]+)/status/(\\d+)(\\?t=[a-zA-Z0-9]+(&s=\\d+)?)?")
+            regex!("://(x|twitter)\\.com/([^/]+)/status/(\\d+)(\\?[a-zA-Z0-9%\\-_&=]+)?")
                 .replace_all(&message.content, "://vxtwitter.com/$2/status/$3")
         else {
             return;
