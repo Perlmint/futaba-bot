@@ -178,7 +178,8 @@ trait EmendableMessage {
         title: &str,
         stats: I,
     ) -> &'a mut Self {
-        if stats.len() == 0 {
+        let mut stats = stats.peekable();
+        if stats.peek().is_none() {
             self.content("Empty records")
         } else {
             self.embed(move |e| {
