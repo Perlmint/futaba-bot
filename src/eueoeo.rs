@@ -273,8 +273,9 @@ impl DiscordHandler {
             .unwrap()
             .and_hms_opt(0, 0, 0)
             .unwrap()
+            .and_utc()
             .timestamp();
-        let message_date = message_date.and_hms_opt(0, 0, 0).unwrap().timestamp();
+        let message_date = message_date.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp();
         let affected = match sqlx::query!(
             "INSERT INTO history (message_id, user_id, date) VALUES (?, ?, ?)",
             message_id,
@@ -406,8 +407,8 @@ impl DiscordHandler {
         let end = now.succ_opt().unwrap();
         info!("current streak range at {}: {} ~ {}", now, begin, end);
         (
-            begin.and_hms_opt(0, 0, 0).unwrap().timestamp(),
-            end.and_hms_opt(0, 0, 0).unwrap().timestamp(),
+            begin.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp(),
+            end.and_hms_opt(0, 0, 0).unwrap().and_utc().timestamp(),
         )
     }
 

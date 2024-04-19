@@ -1,6 +1,6 @@
 use anyhow::Context as _;
 use async_trait::async_trait;
-use chrono::NaiveDateTime;
+use chrono::DateTime;
 use google_calendar3::{
     api::Event as GoogleEvent,
     hyper::{self, client::HttpConnector},
@@ -65,7 +65,6 @@ impl DiscordHandler {
                     .with_native_roots()
                     .https_or_http()
                     .enable_http1()
-                    .enable_http2()
                     .build(),
             ),
             auth,
@@ -94,10 +93,10 @@ impl DiscordHandler {
         fn discord_ts_to_google_date_time(
             ts: serenity::model::Timestamp,
         ) -> google_calendar3::api::EventDateTime {
-            let ts = ts.naive_utc().timestamp();
+            let ts = ts.timestamp();
             google_calendar3::api::EventDateTime {
                 date: None,
-                date_time: NaiveDateTime::from_timestamp_opt(ts, 0).map(|dt| dt.and_utc()),
+                date_time: DateTime::from_timestamp(ts, 0),
                 time_zone: None,
             }
         }

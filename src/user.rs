@@ -4,10 +4,7 @@ use log::error;
 use serde::Deserialize;
 use serenity::{
     model::{
-        application::{
-            component::{ButtonStyle, InputTextStyle},
-            interaction::MessageFlags,
-        },
+        application::{component::ButtonStyle, interaction::MessageFlags},
         prelude::{
             interaction::{
                 application_command::{ApplicationCommandInteraction, CommandDataOption},
@@ -60,7 +57,7 @@ impl DiscordHandler {
         &self,
         context: &Context,
         interaction: &ApplicationCommandInteraction,
-        option: &CommandDataOption,
+        _option: &CommandDataOption,
     ) -> anyhow::Result<()> {
         let user_id = *interaction.user.id.as_u64() as i64;
 

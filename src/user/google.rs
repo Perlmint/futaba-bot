@@ -6,7 +6,6 @@ use axum::{
     extract::Query,
     http::StatusCode,
     response::{IntoResponse, Response},
-    Extension,
 };
 use dashmap::DashMap;
 use futures::Future;
@@ -147,7 +146,7 @@ impl GoogleUserHandler {
     pub async fn auth(&self, user_id: i64, db_pool: SqlitePool) -> anyhow::Result<RedirectUrl> {
         let (url_sender, url_receiver) = oneshot::channel();
         let (code_sender, code_receiver) = oneshot::channel();
-        let (user_id_sender, user_id_receiver) = oneshot::channel();
+        let (_user_id_sender, user_id_receiver) = oneshot::channel();
 
         let id = Uuid::new_v4();
         LOGIN_STATE.insert(id, (code_sender, user_id_receiver));
@@ -230,7 +229,7 @@ struct LoginCallbackQuery {
 }
 
 async fn login_callback(Query(query): Query<LoginCallbackQuery>) -> Response {
-    if let Some((_, (code_sender, user_id_receiver))) = LOGIN_STATE.remove(&query.state) {
+    if let Some((_, (code_sender, _user_id_receiver))) = LOGIN_STATE.remove(&query.state) {
         code_sender
             .send(LoginCallbackCode(query.code))
             .map_err(|e| format!("Failed to send auth code - {e:?}"))
