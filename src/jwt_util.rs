@@ -1,5 +1,5 @@
 use jwt::VerifyingAlgorithm;
-use rsa::{RsaPublicKey, pkcs8::AssociatedOid, Pkcs1v15Sign};
+use rsa::{pkcs8::AssociatedOid, Pkcs1v15Sign, RsaPublicKey};
 use sha2::Digest;
 
 pub enum RsAlgorithm {
