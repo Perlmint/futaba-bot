@@ -9,6 +9,7 @@ mod eueoeo;
 mod events;
 pub(crate) mod jwt_util;
 mod link_rewriter;
+mod llm;
 mod user;
 mod web;
 
@@ -27,6 +28,7 @@ pub(crate) struct Config {
     events: events::Config,
     eueoeo: eueoeo::Config,
     user: user::Config,
+    llm: llm::Config,
 }
 
 #[tokio::main]
@@ -68,14 +70,14 @@ async fn main() -> anyhow::Result<()> {
                             .await
                             .unwrap(),
                     ) as BoxedHandler,
-                    Box::new(
-                        user::DiscordHandler::new(
-                            db_pool.clone(),
-                            &config,
-                        )
-                        .await,
-                    ) as BoxedHandler,
+                    Box::new(user::DiscordHandler::new(db_pool.clone(), &config).await)
+                        as BoxedHandler,
                     Box::new(link_rewriter::DiscordHandler::new()) as BoxedHandler,
+                    Box::new(
+                        llm::DiscordHandler::new(db_pool.clone(), &config)
+                            .await
+                            .unwrap(),
+                    ) as BoxedHandler,
                 ])
                 .collect(),
                 stop_receiver,

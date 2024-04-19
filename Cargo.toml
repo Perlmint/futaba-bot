@@ -19,6 +19,7 @@ chrono = "0.4"
 dashmap = "5.5.3"
 futures = "0.3"
 google-calendar3 = "5.0.2"
+google-generative-ai-rs = "0.2.4"
 hmac = { version = "0.12.1", optional = true }
 jwt = { version = "0.16.0", optional = true }
 log = { version = "^0.4" }
