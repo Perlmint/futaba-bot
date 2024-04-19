@@ -15,6 +15,7 @@
         "rustls",
         "SIGINT",
         "sqlx",
-        "succ"
+        "succ",
+        "unseparated"
     ]
 }

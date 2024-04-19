@@ -1,6 +1,9 @@
+use std::collections::HashMap;
+
 use anyhow::Context as _;
 use async_trait::async_trait;
 use chrono::DateTime;
+use fallible_iterator::FallibleIterator;
 use google_calendar3::{
     api::Event as GoogleEvent,
     hyper::{self, client::HttpConnector},
@@ -14,21 +17,19 @@ use serenity::{
     model::prelude::{GuildId, ScheduledEvent, ScheduledEventId, UserId},
     prelude::Context,
 };
-use sqlx::SqlitePool;
+use sqlx::{Row, SqlitePool};
 
 use super::user::DiscordHandler as UserHandler;
 use crate::discord::{ScheduledEventUpdated, SubApplication};
 
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct Config {
-    calendar_id: String,
     google_service_account_path: String,
 }
 
 pub(crate) struct DiscordHandler {
     db_pool: SqlitePool,
     service_account: google_calendar3::oauth2::ServiceAccountKey,
-    config: Config,
 }
 
 impl DiscordHandler {
@@ -39,7 +40,6 @@ impl DiscordHandler {
                 &config.events.google_service_account_path,
             )
             .await?,
-            config: config.events.clone(),
         })
     }
 
@@ -139,52 +139,122 @@ impl DiscordHandler {
     ) -> anyhow::Result<()> {
         log::info!("Update event");
         let discord_id = *event.id.as_u64() as i64;
-        let saved_event = sqlx::query!(
-            "SELECT `google_event_id` FROM `server_events` WHERE `discord_id` = ?",
+        let mut saved_events: HashMap<_, _> = sqlx::query!(
+            "SELECT `user_id`, `google_event_id` FROM `server_events` WHERE `discord_id` = ?",
             discord_id
         )
-        .fetch_optional(&self.db_pool)
+        .fetch_all(&self.db_pool)
         .await?
-        .map(|d| d.google_event_id);
-        let now = chrono::Utc::now().naive_utc();
+        .into_iter()
+        .map(|d| (d.user_id, d.google_event_id))
+        .collect();
+
         let hub = self.calendar_hub().await?;
         let event = Self::discord_event_to_google_event(&self.db_pool, context, &event).await?;
         log::debug!("converted event: {event:?}");
-        let calendar_id = self.config.calendar_id.as_str();
-        if let Some(google_event_id) = saved_event {
-            hub.events()
-                .update(event, &calendar_id, &google_event_id)
-                .doit()
-                .await?;
-            sqlx::query!(
-                r#"
-                UPDATE `server_events`
-                    SET `google_event_id` = ?, `synced_at` = ?
-                    WHERE `discord_id` = ?
-                "#,
-                google_event_id,
-                now,
-                discord_id
-            )
-            .execute(&self.db_pool)
-            .await?;
+        let mut update_attendees = HashMap::new();
+        let new_attendees: Vec<_> = if let Some(attendees) = event.attendees.as_ref() {
+            fallible_iterator::convert(attendees.into_iter().map(|attendee| -> anyhow::Result<_> {
+                let id: i64 = attendee
+                    .id
+                    .as_ref()
+                    .context("attendee id is empty")?
+                    .parse()
+                    .context("Failed to parse attendee id into i64")?;
+                Ok(
+                    if let Some((user_id, event_id)) = saved_events.remove_entry(&id) {
+                        update_attendees.insert(user_id, event_id);
+                        None
+                    } else {
+                        Some(id)
+                    },
+                )
+            }))
+            .filter_map(|i| anyhow::Result::Ok(i))
+            .collect()?
         } else {
-            let event = hub.events().insert(event, &calendar_id).doit().await?.1;
-            let google_event_id = event.id.as_ref().unwrap();
-            sqlx::query!(
-                r#"
-                INSERT INTO `server_events`
-                    (`discord_id`, `google_event_id`, `synced_at`)
-                    VALUES 
-                    (?, ?, ?)
-                "#,
-                discord_id,
-                google_event_id,
-                now,
-            )
-            .execute(&self.db_pool)
-            .await?;
+            Vec::new()
         };
+        let resigned_attendees = saved_events;
+        let user_calendar_map: HashMap<i64, String> = sqlx::query_builder::QueryBuilder::new(
+            "SELECT `user_id`, `google_calendar_id` FROM `users` WHERE `user_id` IN ",
+        )
+        .push_tuples(
+            new_attendees
+                .iter()
+                .copied()
+                .chain(resigned_attendees.keys().copied())
+                .chain(update_attendees.keys().copied()),
+            |mut b, id| {
+                b.push_bind(id);
+            },
+        )
+        .build()
+        .fetch_all(&self.db_pool)
+        .await?
+        .into_iter()
+        .map(|r| (r.get(0), r.get(1)))
+        .collect();
+
+        for (user_id, event_id) in resigned_attendees {
+            if let Some(calendar_id) = user_calendar_map.get(&user_id) {
+                hub.events()
+                    .delete(calendar_id, &event_id)
+                    .doit()
+                    .await
+                    .with_context(|| format!("Failed delete google event for user({user_id})"))?;
+
+                sqlx::query!(
+                    "
+                    DELETE FROM `server_events` WHERE `discord_id` = ? AND `user_id` = ?",
+                    discord_id,
+                    user_id
+                )
+                .execute(&self.db_pool)
+                .await?;
+            } else {
+                log::warn!("Linked outdated google event is found. but user({user_id}) does not connected to google");
+            }
+        }
+
+        for user_id in new_attendees {
+            if let Some(calendar_id) = user_calendar_map.get(&user_id) {
+                let event = hub
+                    .events()
+                    .insert(event.clone(), &calendar_id)
+                    .doit()
+                    .await?
+                    .1;
+                let google_event_id = event.id.as_ref().unwrap();
+                sqlx::query!(
+                    r#"
+                    INSERT INTO `server_events`
+                        (`discord_id`, `google_event_id`, `user_id`)
+                        VALUES 
+                        (?, ?, ?)
+                    "#,
+                    discord_id,
+                    google_event_id,
+                    user_id,
+                )
+                .execute(&self.db_pool)
+                .await?;
+            } else {
+                log::info!("Google calendar is not connected. Do not create google event for user({user_id}).");
+            }
+        }
+
+        for (user_id, event_id) in update_attendees {
+            if let Some(calendar_id) = user_calendar_map.get(&user_id) {
+                hub.events()
+                    .update(event.clone(), calendar_id, &event_id)
+                    .doit()
+                    .await
+                    .with_context(|| format!("Failed update google event for user({user_id})"))?;
+            } else {
+                log::warn!("Linked google event is found. but user({user_id}) does not connected to google");
+            }
+        }
 
         Ok(())
     }

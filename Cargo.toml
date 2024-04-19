@@ -17,6 +17,7 @@ axum = "0.7.3"
 base64-url = "2.0.2"
 chrono = "0.4"
 dashmap = "5.5.3"
+fallible-iterator = { version = "0.3.0", features = ["std"] }
 futures = "0.3"
 google-calendar3 = "5.0.2"
 google-generative-ai-rs = "0.2.4"
