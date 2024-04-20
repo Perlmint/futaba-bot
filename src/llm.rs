@@ -7,6 +7,7 @@ use google_generative_ai_rs::v1::{
     },
 };
 use log::error;
+use once_cell::sync::OnceCell;
 use serde::Deserialize;
 use serenity::{
     client::Context,
@@ -37,6 +38,7 @@ pub(crate) struct Config {
 pub struct DiscordHandler {
     db_pool: SqlitePool,
     cached_prompt: RwLock<Option<String>>,
+    cached_mention_msg: OnceCell<String>,
     config: Config,
 }
 
@@ -56,6 +58,7 @@ impl DiscordHandler {
         Ok(Self {
             db_pool,
             cached_prompt: RwLock::new(cached_prompt),
+            cached_mention_msg: OnceCell::new(),
             config: config.llm.clone(),
         })
     }
@@ -91,6 +94,9 @@ impl SubApplication for DiscordHandler {
             )
             .await
             .unwrap();
+
+        self.cached_mention_msg
+            .set(format!("<@{}>", context.cache.current_user_id().0));
     }
 
     async fn application_command_interaction_create(
@@ -228,7 +234,7 @@ impl SubApplication for DiscordHandler {
             role: Role::User,
             parts: vec![Part {
                 text: Some(message.content.replacen(
-                    &format!("<@{}>", context.cache.current_user_id().0),
+                    unsafe { self.cached_mention_msg.get_unchecked() },
                     "",
                     1,
                 )),
@@ -248,18 +254,30 @@ impl SubApplication for DiscordHandler {
                 )
                 .await
                 .unwrap();
-            contents.push(Content {
-                role: if message.author.id == context.cache.current_user_id() {
-                    Role::Model
-                } else {
-                    Role::User
-                },
-                parts: vec![Part {
-                    text: Some(message.content.trim_end_matches(END_INDICATOR).to_string()),
-                    inline_data: None,
-                    file_data: None,
-                    video_metadata: None,
-                }],
+            contents.push(if message.author.id == context.cache.current_user_id() {
+                Content {
+                    role: Role::Model,
+                    parts: vec![Part {
+                        text: Some(message.content.trim_end_matches(END_INDICATOR).to_string()),
+                        inline_data: None,
+                        file_data: None,
+                        video_metadata: None,
+                    }],
+                }
+            } else {
+                Content {
+                    role: Role::User,
+                    parts: vec![Part {
+                        text: Some(message.content.replacen(
+                            unsafe { self.cached_mention_msg.get_unchecked() },
+                            "",
+                            1,
+                        )),
+                        inline_data: None,
+                        file_data: None,
+                        video_metadata: None,
+                    }],
+                }
             });
             message_reference = message.message_reference;
         }
