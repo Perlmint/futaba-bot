@@ -204,6 +204,9 @@ impl SubApplication for DiscordHandler {
     }
 
     async fn message(&self, context: &Context, message: &Message) {
+        const WORKING_INDICATOR: &str = "`<...>`";
+        const END_INDICATOR: &str = "`<DONE>`";
+
         let mentioned = match message.mentions_me(context).await {
             Ok(mentioned) => mentioned,
             Err(e) => {
@@ -248,7 +251,7 @@ impl SubApplication for DiscordHandler {
                     Role::User
                 },
                 parts: vec![Part {
-                    text: Some(message.content.clone()),
+                    text: Some(message.content.trim_end_matches(END_INDICATOR).to_string()),
                     inline_data: None,
                     file_data: None,
                     video_metadata: None,
@@ -276,8 +279,7 @@ impl SubApplication for DiscordHandler {
             generation_config: None,
         };
 
-        const INDICATOR_MESSAGE: &str = "`<...>`";
-        let mut joined_response = String::from(INDICATOR_MESSAGE);
+        let mut joined_response = String::from(WORKING_INDICATOR);
         let mut reply = match message.reply(context, &joined_response).await {
             Ok(message) => message,
             Err(e) => {
@@ -324,7 +326,7 @@ impl SubApplication for DiscordHandler {
                             }
                         };
 
-                        joined_response.truncate(joined_response.len() - INDICATOR_MESSAGE.len());
+                        joined_response.truncate(joined_response.len() - WORKING_INDICATOR.len());
                         joined_response.extend(
                             response.candidates.into_iter().next().into_iter().flat_map(
                                 |candidate| {
@@ -336,7 +338,7 @@ impl SubApplication for DiscordHandler {
                                 },
                             ),
                         );
-                        joined_response.push_str(INDICATOR_MESSAGE);
+                        joined_response.push_str(WORKING_INDICATOR);
 
                         if let Err(e) = reply
                             .edit(&context, |builder| builder.content(&joined_response))
@@ -348,8 +350,8 @@ impl SubApplication for DiscordHandler {
                 }
             }
 
-            joined_response.truncate(joined_response.len() - INDICATOR_MESSAGE.len());
-            joined_response.push_str("`<DONE>`");
+            joined_response.truncate(joined_response.len() - WORKING_INDICATOR.len());
+            joined_response.push_str(END_INDICATOR);
             if let Err(e) = reply
                 .edit(context, |builder| builder.content(joined_response))
                 .await
