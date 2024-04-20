@@ -26,7 +26,7 @@ pub(crate) async fn start(
     let port: u16 = std::env::var("WEB_PORT")
         .ok()
         .map(|port_str| port_str.parse::<u16>())
-        .unwrap_or(Ok(80))
+        .unwrap_or(Ok(8000))
         .context("Failed to parse WEB_PORT")?;
 
     let router = axum::Router::new()

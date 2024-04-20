@@ -1,5 +1,6 @@
 -- Add migration script here
 ALTER TABLE `users` ADD COLUMN `google_calendar_id` TEXT;
+ALTER TABLE `users` ADD COLUMN `google_calendar_acl_id` TEXT;
 DROP TABLE `server_events`;
 CREATE TABLE `server_events` (
     `discord_id` INTEGER(64) NOT NULL,

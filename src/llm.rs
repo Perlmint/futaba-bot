@@ -95,7 +95,7 @@ impl SubApplication for DiscordHandler {
             .await
             .unwrap();
 
-        self.cached_mention_msg
+        let _ = self.cached_mention_msg
             .set(format!("<@{}>", context.cache.current_user_id().0));
     }
 

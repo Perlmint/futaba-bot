@@ -70,8 +70,11 @@ async fn main() -> anyhow::Result<()> {
                             .await
                             .unwrap(),
                     ) as BoxedHandler,
-                    Box::new(user::DiscordHandler::new(db_pool.clone(), &config).await)
-                        as BoxedHandler,
+                    Box::new(
+                        user::DiscordHandler::new(db_pool.clone(), &config)
+                            .await
+                            .unwrap(),
+                    ) as BoxedHandler,
                     Box::new(link_rewriter::DiscordHandler::new()) as BoxedHandler,
                     Box::new(
                         llm::DiscordHandler::new(db_pool.clone(), &config)

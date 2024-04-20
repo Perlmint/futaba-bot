@@ -4,12 +4,9 @@ use log::error;
 use serde::Deserialize;
 use serenity::{
     model::{
-        application::{component::ButtonStyle, interaction::MessageFlags},
+        application::{component::ButtonStyle, interaction::InteractionResponseType},
         prelude::{
-            interaction::{
-                application_command::{ApplicationCommandInteraction, CommandDataOption},
-                InteractionResponseType,
-            },
+            interaction::application_command::{ApplicationCommandInteraction, CommandDataOption},
             GuildId, UserId,
         },
     },
@@ -31,6 +28,7 @@ use self::google::GoogleUserHandler;
 #[derive(Debug, Deserialize, Clone)]
 pub(crate) struct Config {
     google_oauth_secret_path: String,
+    google_service_account_path: String,
     redirect_prefix: String,
 }
 
@@ -42,15 +40,16 @@ pub struct DiscordHandler {
 const COMMAND_NAME: &str = "user";
 
 impl DiscordHandler {
-    pub async fn new(db_pool: SqlitePool, config: &super::Config) -> Self {
-        Self {
+    pub async fn new(db_pool: SqlitePool, config: &super::Config) -> anyhow::Result<Self> {
+        Ok(Self {
             db_pool,
             google: GoogleUserHandler::new(
                 &config.user.google_oauth_secret_path,
+                &config.user.google_service_account_path,
                 &config.user.redirect_prefix,
             )
-            .await,
-        }
+            .await?,
+        })
     }
 
     async fn handle_google_command(
@@ -59,26 +58,34 @@ impl DiscordHandler {
         interaction: &ApplicationCommandInteraction,
         _option: &CommandDataOption,
     ) -> anyhow::Result<()> {
-        let user_id = *interaction.user.id.as_u64() as i64;
+        let user_id = interaction.user.id;
 
-        let url = self.google.auth(user_id, self.db_pool.clone()).await?;
+        let url = self
+            .google
+            .auth(
+                user_id,
+                self.db_pool.clone(),
+                context.clone(),
+                interaction.clone(),
+            )
+            .await?;
 
         interaction
-            .create_interaction_response(context, |c| {
-                c.kind(InteractionResponseType::ChannelMessageWithSource)
-                    .interaction_response_data(|c| {
-                        c.components(|c| {
-                            c.create_action_row(|c| {
-                                c.create_button(|c| {
-                                    c.label("Login").style(ButtonStyle::Link).url(url.0)
+            .create_interaction_response(context, |b| {
+                b.kind(InteractionResponseType::ChannelMessageWithSource)
+                    .interaction_response_data(|b| {
+                        b.components(|b| {
+                            b.create_action_row(|b| {
+                                b.create_button(|b| {
+                                    b.label("Login").style(ButtonStyle::Link).url(url.0)
                                 })
                             })
                         })
-                        .flags(MessageFlags::EPHEMERAL)
+                        .ephemeral(true)
                     })
             })
             .await
-            .context("Failed to send interaction response")?;
+            .context("Failed to update interaction response")?;
 
         Ok(())
     }
@@ -132,6 +139,11 @@ impl SubApplication for DiscordHandler {
                 ..Default::default()
             }],
         };
+
+        let guild = context.cache.guild(guild_id);
+        let guild = unsafe { guild.unwrap_unchecked() };
+        let server_name = guild.name;
+        let _ = self.google.calendar_name.set(server_name);
 
         context
             .http

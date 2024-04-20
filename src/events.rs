@@ -3,7 +3,6 @@ use std::collections::HashMap;
 use anyhow::Context as _;
 use async_trait::async_trait;
 use chrono::DateTime;
-use fallible_iterator::FallibleIterator;
 use google_calendar3::{
     api::Event as GoogleEvent,
     hyper::{self, client::HttpConnector},
@@ -19,7 +18,6 @@ use serenity::{
 };
 use sqlx::{Row, SqlitePool};
 
-use super::user::DiscordHandler as UserHandler;
 use crate::discord::{ScheduledEventUpdated, SubApplication};
 
 #[derive(Debug, Deserialize, Clone)]
@@ -72,24 +70,8 @@ impl DiscordHandler {
     }
 
     async fn discord_event_to_google_event(
-        db_pool: &SqlitePool,
-        context: &Context,
         discord_event: &ScheduledEvent,
     ) -> anyhow::Result<GoogleEvent> {
-        let users = context
-            .http
-            .get_scheduled_event_users(
-                discord_event.guild_id.0,
-                discord_event.id.0,
-                None,
-                None,
-                Some(false),
-            )
-            .await?;
-        let users =
-            UserHandler::get_google_ids(db_pool, users.into_iter().map(|user| user.user.id))
-                .await?;
-        // map google-id
         fn discord_ts_to_google_date_time(
             ts: serenity::model::Timestamp,
         ) -> google_calendar3::api::EventDateTime {
@@ -111,23 +93,6 @@ impl DiscordHandler {
             start: Some(start),
             summary: Some(discord_event.name.clone()),
             location: discord_event.metadata.as_ref().map(|d| d.location.clone()),
-            attendees: Some(
-                users
-                    .into_iter()
-                    .map(|google_id| google_calendar3::api::EventAttendee {
-                        additional_guests: None,
-                        comment: None,
-                        display_name: None,
-                        email: Some(google_id),
-                        id: None,
-                        optional: None,
-                        organizer: None,
-                        resource: None,
-                        response_status: None,
-                        self_: None,
-                    })
-                    .collect(),
-            ),
             ..Default::default()
         })
     }
@@ -149,33 +114,31 @@ impl DiscordHandler {
         .map(|d| (d.user_id, d.google_event_id))
         .collect();
 
+        let users = context
+            .http
+            .get_scheduled_event_users(event.guild_id.0, event.id.0, None, None, Some(false))
+            .await
+            .context("Failed to get attendees")?;
+        log::debug!("saved_events: {saved_events:?}");
+
         let hub = self.calendar_hub().await?;
-        let event = Self::discord_event_to_google_event(&self.db_pool, context, &event).await?;
+        let google_event = Self::discord_event_to_google_event(&event).await?;
         log::debug!("converted event: {event:?}");
         let mut update_attendees = HashMap::new();
-        let new_attendees: Vec<_> = if let Some(attendees) = event.attendees.as_ref() {
-            fallible_iterator::convert(attendees.into_iter().map(|attendee| -> anyhow::Result<_> {
-                let id: i64 = attendee
-                    .id
-                    .as_ref()
-                    .context("attendee id is empty")?
-                    .parse()
-                    .context("Failed to parse attendee id into i64")?;
-                Ok(
-                    if let Some((user_id, event_id)) = saved_events.remove_entry(&id) {
-                        update_attendees.insert(user_id, event_id);
-                        None
-                    } else {
-                        Some(id)
-                    },
-                )
-            }))
-            .filter_map(|i| anyhow::Result::Ok(i))
-            .collect()?
-        } else {
-            Vec::new()
-        };
+        let new_attendees: Vec<_> = users
+            .into_iter()
+            .filter_map(|attendee| {
+                let id: i64 = attendee.user.id.0 as i64;
+                if let Some((user_id, event_id)) = saved_events.remove_entry(&id) {
+                    update_attendees.insert(user_id, event_id);
+                    None
+                } else {
+                    Some(id)
+                }
+            })
+            .collect();
         let resigned_attendees = saved_events;
+        log::debug!("attendees\n\tnew: {new_attendees:?}\n\tresign: {resigned_attendees:?}\n\tupdate: {update_attendees:?}");
         let user_calendar_map: HashMap<i64, String> = sqlx::query_builder::QueryBuilder::new(
             "SELECT `user_id`, `google_calendar_id` FROM `users` WHERE `user_id` IN ",
         )
@@ -205,8 +168,8 @@ impl DiscordHandler {
                     .with_context(|| format!("Failed delete google event for user({user_id})"))?;
 
                 sqlx::query!(
-                    "
-                    DELETE FROM `server_events` WHERE `discord_id` = ? AND `user_id` = ?",
+                    "DELETE FROM `server_events`
+                    WHERE `discord_id` = ? AND `user_id` = ?",
                     discord_id,
                     user_id
                 )
@@ -221,7 +184,7 @@ impl DiscordHandler {
             if let Some(calendar_id) = user_calendar_map.get(&user_id) {
                 let event = hub
                     .events()
-                    .insert(event.clone(), &calendar_id)
+                    .insert(google_event.clone(), &calendar_id)
                     .doit()
                     .await?
                     .1;
@@ -247,7 +210,7 @@ impl DiscordHandler {
         for (user_id, event_id) in update_attendees {
             if let Some(calendar_id) = user_calendar_map.get(&user_id) {
                 hub.events()
-                    .update(event.clone(), calendar_id, &event_id)
+                    .update(google_event.clone(), calendar_id, &event_id)
                     .doit()
                     .await
                     .with_context(|| format!("Failed update google event for user({user_id})"))?;

@@ -9,7 +9,23 @@ use axum::{
 };
 use dashmap::DashMap;
 use futures::Future;
-use google_calendar3::oauth2::{self, authenticator_delegate::InstalledFlowDelegate};
+use google_calendar3::{
+    api::{AclRule, AclRuleScope, Calendar},
+    hyper, hyper_rustls,
+    oauth2::{self, authenticator_delegate::InstalledFlowDelegate},
+    CalendarHub,
+};
+use log::{error, info};
+use once_cell::sync::OnceCell;
+use serenity::{
+    http::Http,
+    model::{
+        application::interaction::{
+            application_command::ApplicationCommandInteraction, InteractionResponseType,
+        },
+        id::UserId,
+    },
+};
 use sqlx::SqlitePool;
 use tokio::sync::{oneshot, Mutex};
 use uuid::Uuid;
@@ -22,13 +38,7 @@ struct LoginCallbackCode(String);
 #[derive(Debug, Clone)]
 pub struct RedirectUrl(pub String);
 
-type LoginStateMap = DashMap<
-    Uuid,
-    (
-        oneshot::Sender<LoginCallbackCode>,
-        oneshot::Receiver<Option<String>>,
-    ),
->;
+type LoginStateMap = DashMap<Uuid, oneshot::Sender<LoginCallbackCode>>;
 
 const CALENDAR_SCOPE: &[&str] = &[
     "https://www.googleapis.com/auth/calendar",
@@ -129,91 +139,237 @@ static LOGIN_STATE: once_cell::sync::Lazy<LoginStateMap> =
 pub struct GoogleUserHandler {
     secret: oauth2::ApplicationSecret,
     redirect_prefix: String,
+    service_account: google_calendar3::oauth2::ServiceAccountKey,
+    pub(super) calendar_name: OnceCell<String>,
     pub(super) key_store: Arc<BTreeMap<String, RsaVerifying>>,
 }
 
 impl GoogleUserHandler {
-    pub async fn new(application_secret_path: &str, redirect_prefix: &str) -> Self {
-        Self {
-            secret: google_calendar3::oauth2::read_application_secret(application_secret_path)
+    pub async fn new(
+        application_secret_path: &str,
+        service_account_key_path: &str,
+        redirect_prefix: &str,
+    ) -> anyhow::Result<Self> {
+        let service_account =
+            google_calendar3::oauth2::read_service_account_key(service_account_key_path)
                 .await
-                .unwrap(),
+                .context("Failed to read service account info")?;
+        let secret = google_calendar3::oauth2::read_application_secret(application_secret_path)
+            .await
+            .context("Failed to read application secret")?;
+
+        Ok(Self {
+            secret,
+            service_account,
             redirect_prefix: redirect_prefix.to_string(),
-            key_store: Arc::new(fetch_google_key_store().await.unwrap()),
-        }
+            calendar_name: OnceCell::new(),
+            key_store: Arc::new(
+                fetch_google_key_store()
+                    .await
+                    .context("Failed to fetch google key store")?,
+            ),
+        })
     }
 
-    pub async fn auth(&self, user_id: i64, db_pool: SqlitePool) -> anyhow::Result<RedirectUrl> {
+    pub async fn auth(
+        &self,
+        user_id: UserId,
+        db_pool: SqlitePool,
+        context: impl AsRef<Http> + Send + 'static,
+        response_message: ApplicationCommandInteraction,
+    ) -> anyhow::Result<RedirectUrl> {
         let (url_sender, url_receiver) = oneshot::channel();
         let (code_sender, code_receiver) = oneshot::channel();
-        let (_user_id_sender, user_id_receiver) = oneshot::channel();
 
         let id = Uuid::new_v4();
-        LOGIN_STATE.insert(id, (code_sender, user_id_receiver));
+        LOGIN_STATE.insert(id, code_sender);
 
         let secret = self.secret.clone();
         let key_store = self.key_store.clone();
         let redirect_uri = format!("{}/user/google/login_callback", self.redirect_prefix);
+        let service_account = self.service_account.client_email.clone();
+        let calendar_name = unsafe { self.calendar_name.get_unchecked() }.clone();
 
         tokio::spawn(async move {
-            let auth = oauth2::InstalledFlowAuthenticator::builder(
-                secret,
-                oauth2::InstalledFlowReturnMethod::Interactive,
-            )
-            .flow_delegate(Box::new(LoginDelegate {
-                channels: Mutex::new(Some((url_sender, code_receiver))),
-                redirect_uri,
-                context_id: id,
-            }))
-            .build()
-            .await
-            .context("Failed to installed flow")
-            .unwrap();
-
-            let (_subject, email) = {
-                use jwt::VerifyWithStore;
-
-                let id_token = auth.id_token(CALENDAR_SCOPE).await.unwrap().unwrap();
-                let mut claims: BTreeMap<String, serde_json::Value> = id_token
-                    .verify_with_store(key_store.as_ref())
-                    .context("jwt verification failed")
-                    .unwrap();
-                (
-                    claims
-                        .remove("sub")
-                        .context("sub is not in received claims")
-                        .unwrap(),
-                    claims
-                        .remove("email")
-                        .context("email is not in received claims")
-                        .unwrap()
-                        .as_str()
-                        .unwrap()
-                        .to_string(),
+            let result: anyhow::Result<()> = async move {
+                let auth = oauth2::InstalledFlowAuthenticator::builder(
+                    secret,
+                    oauth2::InstalledFlowReturnMethod::Interactive,
                 )
-            };
-
-            auth.token(CALENDAR_SCOPE)
+                .flow_delegate(Box::new(LoginDelegate {
+                    channels: Mutex::new(Some((url_sender, code_receiver))),
+                    redirect_uri,
+                    context_id: id,
+                }))
+                .build()
                 .await
-                .context("Failed to get access token")
-                .unwrap();
+                .context("Failed to installed flow")?;
 
-            log::info!("Login succeed {email}");
+                let (_subject, email) = {
+                    use jwt::VerifyWithStore;
 
-            sqlx::query!(
-                "UPDATE `users` SET `google_email` = ? WHERE `user_id` = ?",
-                email,
-                user_id
-            )
-            .execute(&db_pool)
-            .await
-            .context("Failed to store google email to DB")
-            .unwrap();
+                    let id_token = auth.id_token(CALENDAR_SCOPE).await.unwrap().unwrap();
+                    let mut claims: BTreeMap<String, serde_json::Value> = id_token
+                        .verify_with_store(key_store.as_ref())
+                        .context("jwt verification failed")?;
+                    (
+                        claims
+                            .remove("sub")
+                            .context("sub is not in received claims")
+                            .unwrap(),
+                        claims
+                            .remove("email")
+                            .context("email is not in received claims")
+                            .unwrap()
+                            .as_str()
+                            .unwrap()
+                            .to_string(),
+                    )
+                };
 
-            // user_id_sender
-            //     .send(Some(user_id))
-            //     .map_err(|_| anyhow::anyhow!("Failed to send user_id to callback handler"))
-            //     .unwrap();
+                auth.token(CALENDAR_SCOPE)
+                    .await
+                    .context("Failed to get access token")?;
+
+                log::info!("Login succeed {email}");
+
+                let raw_user_id = *user_id.as_u64() as i64;
+                sqlx::query!(
+                    "UPDATE `users` SET `google_email` = ? WHERE `user_id` = ?",
+                    email,
+                    raw_user_id
+                )
+                .execute(&db_pool)
+                .await
+                .context("Failed to store google email to DB")?;
+
+                let calendar_hub = CalendarHub::new(
+                    hyper::Client::builder().build(
+                        hyper_rustls::HttpsConnectorBuilder::new()
+                            .with_native_roots()
+                            .https_or_http()
+                            .enable_http1()
+                            .build(),
+                    ),
+                    auth,
+                );
+
+                let record = sqlx::query!(
+                    "SELECT `google_calendar_id`, `google_calendar_acl_id`
+                    FROM `users`
+                    WHERE `user_id` = ?",
+                    raw_user_id
+                )
+                .fetch_one(&db_pool)
+                .await
+                .context("Failed to fetch google calendar id from DB")?;
+                let calendar_id = record.google_calendar_id;
+                let acl_id = record.google_calendar_acl_id;
+
+                let (calendar_id, acl_id) = if let Some(calendar_id) = calendar_id {
+                    if let Err(e) = calendar_hub.calendars().get(&calendar_id).doit().await {
+                        info!("Saved calendar_id({calendar_id}) is invalid - {e:?}");
+                        (None, None)
+                    } else if let Some(acl_id) = acl_id {
+                        let acl_id = if let Err(e) =
+                            calendar_hub.acl().get(&calendar_id, &acl_id).doit().await
+                        {
+                            info!("Saved acl_id is invalid - {e:?}");
+                            None
+                        } else {
+                            Some(acl_id)
+                        };
+                        (Some(calendar_id), acl_id)
+                    } else {
+                        (Some(calendar_id), None)
+                    }
+                } else {
+                    (None, None)
+                };
+
+                let calendar_id = if let Some(calendar_id) = calendar_id {
+                    calendar_id
+                } else {
+                    info!("Create new calendar");
+                    calendar_hub
+                        .calendars()
+                        .insert(Calendar {
+                            summary: Some(calendar_name),
+                            ..Default::default()
+                        })
+                        .doit()
+                        .await
+                        .context("Failed to create calendar")?
+                        .1
+                        .id
+                        .ok_or_else(|| anyhow::anyhow!("Mandatory field is missing"))?
+                };
+
+                let acl_id = if let Some(acl_id) = acl_id {
+                    acl_id
+                } else {
+                    info!("Share calendar {calendar_id} to service account");
+                    calendar_hub
+                        .acl()
+                        .insert(
+                            AclRule {
+                                etag: None,
+                                id: None,
+                                kind: None,
+                                role: Some("writer".to_string()),
+                                scope: Some(AclRuleScope {
+                                    type_: Some("user".to_string()),
+                                    value: Some(service_account),
+                                }),
+                            },
+                            &calendar_id,
+                        )
+                        .doit()
+                        .await
+                        .context("Failed to set ACL of calendar")?
+                        .1
+                        .id
+                        .expect("Id of AclRule in Response should be set")
+                };
+
+                sqlx::query!(
+                    "UPDATE `users`
+                    SET `google_calendar_id` = ?, `google_calendar_acl_id` = ?
+                    WHERE `user_id` = ?",
+                    calendar_id,
+                    acl_id,
+                    raw_user_id
+                )
+                .execute(&db_pool)
+                .await
+                .context("Failed to save calendar data into DB")?;
+
+                Ok(())
+            }
+            .await;
+
+            if let Err(e) = result {
+                error!("Error occurred while login - {e:?}");
+                if let Err(e) = response_message
+                    .create_interaction_response(context, |b| {
+                        b.kind(InteractionResponseType::DeferredUpdateMessage)
+                            .interaction_response_data(|b| b.content("실패").ephemeral(true))
+                    })
+                    .await
+                {
+                    error!("Failed to update response - {e:?}");
+                }
+            } else {
+                if let Err(e) = response_message
+                    .create_interaction_response(context, |b| {
+                        b.kind(InteractionResponseType::DeferredUpdateMessage)
+                            .interaction_response_data(|b| b.content("완료").ephemeral(true))
+                    })
+                    .await
+                {
+                    error!("Failed to update response - {e:?}");
+                }
+            }
         });
 
         url_receiver.await.context("Url")
@@ -229,7 +385,7 @@ struct LoginCallbackQuery {
 }
 
 async fn login_callback(Query(query): Query<LoginCallbackQuery>) -> Response {
-    if let Some((_, (code_sender, _user_id_receiver))) = LOGIN_STATE.remove(&query.state) {
+    if let Some((_, code_sender)) = LOGIN_STATE.remove(&query.state) {
         code_sender
             .send(LoginCallbackCode(query.code))
             .map_err(|e| format!("Failed to send auth code - {e:?}"))
