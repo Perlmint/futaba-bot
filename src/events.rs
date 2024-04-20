@@ -109,7 +109,8 @@ impl DiscordHandler {
             discord_id
         )
         .fetch_all(&self.db_pool)
-        .await?
+        .await
+        .context("Failed to get saved events from DB")?
         .into_iter()
         .map(|d| (d.user_id, d.google_event_id))
         .collect();
@@ -121,8 +122,13 @@ impl DiscordHandler {
             .context("Failed to get attendees")?;
         log::debug!("saved_events: {saved_events:?}");
 
-        let hub = self.calendar_hub().await?;
-        let google_event = Self::discord_event_to_google_event(&event).await?;
+        let hub = self
+            .calendar_hub()
+            .await
+            .context("Failed to create google calendar hub")?;
+        let google_event = Self::discord_event_to_google_event(&event)
+            .await
+            .context("Filed to convert discord event to google event")?;
         log::debug!("converted event: {event:?}");
         let mut update_attendees = HashMap::new();
         let new_attendees: Vec<_> = users
@@ -154,7 +160,8 @@ impl DiscordHandler {
         )
         .build()
         .fetch_all(&self.db_pool)
-        .await?
+        .await
+        .context("Failed to get user calendars from DB")?
         .into_iter()
         .map(|r| (r.get(0), r.get(1)))
         .collect();
@@ -174,7 +181,8 @@ impl DiscordHandler {
                     user_id
                 )
                 .execute(&self.db_pool)
-                .await?;
+                .await
+                .context("Failed to delete events in discord")?;
             } else {
                 log::warn!("Linked outdated google event is found. but user({user_id}) does not connected to google");
             }
@@ -186,7 +194,8 @@ impl DiscordHandler {
                     .events()
                     .insert(google_event.clone(), &calendar_id)
                     .doit()
-                    .await?
+                    .await
+                    .context("Failed to insert new event in google(calendar - {calendar_id}) for user({user_id})")?
                     .1;
                 let google_event_id = event.id.as_ref().unwrap();
                 sqlx::query!(
@@ -201,7 +210,8 @@ impl DiscordHandler {
                     user_id,
                 )
                 .execute(&self.db_pool)
-                .await?;
+                .await
+                .context("Failed to insert google event in DB")?;
             } else {
                 log::info!("Google calendar is not connected. Do not create google event for user({user_id}).");
             }
@@ -233,7 +243,8 @@ impl DiscordHandler {
         let event = context
             .http
             .get_scheduled_event(guild_id.0, event_id.0, false)
-            .await?;
+            .await
+            .context("Failed to get event detail")?;
 
         self.update_server_event(context, &event).await?;
 
