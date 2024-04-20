@@ -294,7 +294,7 @@ impl SubApplication for DiscordHandler {
             }
         }
 
-        log::info!("{contents:?}");
+        log::debug!("{contents:?}");
 
         let request = Request {
             contents,
