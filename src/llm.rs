@@ -227,7 +227,11 @@ impl SubApplication for DiscordHandler {
         let mut contents = vec![Content {
             role: Role::User,
             parts: vec![Part {
-                text: Some(message.content.to_string()),
+                text: Some(message.content.replacen(
+                    &format!("<@{}>", context.cache.current_user_id().0),
+                    "",
+                    1,
+                )),
                 inline_data: None,
                 file_data: None,
                 video_metadata: None,
@@ -245,7 +249,7 @@ impl SubApplication for DiscordHandler {
                 .await
                 .unwrap();
             contents.push(Content {
-                role: if message.author.bot {
+                role: if message.author.id == context.cache.current_user_id() {
                     Role::Model
                 } else {
                     Role::User
@@ -271,6 +275,8 @@ impl SubApplication for DiscordHandler {
                 text.insert_str(0, cached_prompt);
             }
         }
+
+        log::info!("{contents:?}");
 
         let request = Request {
             contents,
