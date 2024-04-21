@@ -146,7 +146,11 @@ impl DiscordHandler {
         let resigned_attendees = saved_events;
         log::debug!("attendees\n\tnew: {new_attendees:?}\n\tresign: {resigned_attendees:?}\n\tupdate: {update_attendees:?}");
         let user_calendar_map: HashMap<i64, String> = sqlx::query_builder::QueryBuilder::new(
-            "SELECT `user_id`, `google_calendar_id` FROM `users` WHERE `user_id` IN ",
+            "SELECT `user_id`, `google_calendar_id`
+            FROM `users`
+            WHERE
+                `google_calendar_id` IS NOT NULL
+                AND `user_id` IN ",
         )
         .push_tuples(
             new_attendees
@@ -195,7 +199,7 @@ impl DiscordHandler {
                     .insert(google_event.clone(), &calendar_id)
                     .doit()
                     .await
-                    .context("Failed to insert new event in google(calendar - {calendar_id}) for user({user_id})")?
+                    .with_context(|| format!("Failed to insert new event in google(calendar - {calendar_id}) for user({user_id})"))?
                     .1;
                 let google_event_id = event.id.as_ref().unwrap();
                 sqlx::query!(
