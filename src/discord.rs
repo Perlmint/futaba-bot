@@ -7,7 +7,7 @@ use serenity::{
     client::{Context, EventHandler},
     http::CacheHttp,
     model::{
-        application::interaction::{Interaction, InteractionType},
+        application::interaction::{modal::ModalSubmitInteraction, Interaction, InteractionType},
         channel::Message,
         gateway::GatewayIntents,
         guild::Member,
@@ -52,6 +52,9 @@ pub trait SubApplication {
         _context: &Context,
         _interaction: &AutocompleteInteraction,
     ) -> bool {
+        false
+    }
+    async fn modal_submit(&self, _context: &Context, _modal: &ModalSubmitInteraction) -> bool {
         false
     }
     async fn update_member(&self, _member: &Member) -> anyhow::Result<()> {
@@ -309,6 +312,15 @@ impl EventHandler for Handler {
 
                 for app in &self.applications {
                     app.autocomplete(&context, &autocomplete).await;
+                }
+            }
+            InteractionType::ModalSubmit => {
+                let Some(modal_submit) = interaction.modal_submit() else {
+                    return;
+                };
+
+                for app in &self.applications {
+                    app.modal_submit(&context, &modal_submit).await;
                 }
             }
             _ => {}
