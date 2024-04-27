@@ -6,7 +6,7 @@ use google_generative_ai_rs::v1::{
         request::Request, response::GeminiResponse, Content, Model, Part, ResponseType, Role,
     },
 };
-use log::error;
+use log::{error, info};
 use once_cell::sync::OnceCell;
 use serde::Deserialize;
 use serenity::{
@@ -332,45 +332,59 @@ impl SubApplication for DiscordHandler {
 
         let context = context.clone();
         tokio::task::spawn(async move {
-            if let Some(stream_response) = response.streamed() {
-                if let Some(mut json_stream) = stream_response.response_stream {
-                    while let Some(response) = json_stream.next().await {
-                        let response = match response {
-                            Ok(response) => response,
-                            Err(e) => {
-                                error!("Received error from Google AI - {e:?}");
-                                return;
-                            }
-                        };
-
-                        let response: GeminiResponse = match serde_json::from_value(response) {
-                            Ok(response) => response,
-                            Err(e) => {
-                                error!("Failed to parse received response from Google AI - {e:?}");
-                                return;
-                            }
-                        };
-
-                        joined_response.truncate(joined_response.len() - WORKING_INDICATOR.len());
-                        joined_response.extend(
-                            response.candidates.into_iter().next().into_iter().flat_map(
-                                |candidate| {
-                                    candidate
-                                        .content
-                                        .parts
-                                        .into_iter()
-                                        .filter_map(|part| part.text)
-                                },
-                            ),
-                        );
-                        joined_response.push_str(WORKING_INDICATOR);
-
-                        if let Err(e) = reply
-                            .edit(&context, |builder| builder.content(&joined_response))
-                            .await
-                        {
-                            error!("Failed to report error by reply - {e:?}");
+            if let Some(mut json_stream) = response
+                .streamed()
+                .and_then(|stream_response| stream_response.response_stream)
+            {
+                while let Some(response) = json_stream.next().await {
+                    let response = match response {
+                        Ok(response) => response,
+                        Err(e) => {
+                            error!("Received error from Google AI - {e:?}");
+                            return;
                         }
+                    };
+
+                    if let Some(o) = response.as_object() {
+                        if !o.contains_key("candidates") {
+                            info!("skip empty response");
+                            continue;
+                        }
+                    } else {
+                        error!("Received error from Google AI received object is not an object - {response}");
+                        return;
+                    }
+
+                    let response: GeminiResponse = match serde_json::from_value(response) {
+                        Ok(response) => response,
+                        Err(e) => {
+                            error!("Failed to parse received response from Google AI - {e:?}");
+                            return;
+                        }
+                    };
+
+                    joined_response.truncate(joined_response.len() - WORKING_INDICATOR.len());
+                    joined_response.extend(
+                        response
+                            .candidates
+                            .into_iter()
+                            .next()
+                            .into_iter()
+                            .flat_map(|candidate| {
+                                candidate
+                                    .content
+                                    .parts
+                                    .into_iter()
+                                    .filter_map(|part| part.text)
+                            }),
+                    );
+                    joined_response.push_str(WORKING_INDICATOR);
+
+                    if let Err(e) = reply
+                        .edit(&context, |builder| builder.content(&joined_response))
+                        .await
+                    {
+                        error!("Failed to report error by reply - {e:?}");
                     }
                 }
             }
