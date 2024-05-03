@@ -2,13 +2,12 @@ use axum::async_trait;
 use futures::stream::StreamExt;
 use google_generative_ai_rs::v1::{
     api::Client as GoogleAiClient,
-    gemini::{
-        request::Request, response::GeminiResponse, Content, Model, Part, ResponseType, Role,
-    },
+    gemini::{request::Request, response::Candidate, Content, Model, Part, ResponseType, Role},
 };
-use log::{error, info};
+use log::*;
 use once_cell::sync::OnceCell;
 use serde::Deserialize;
+use serde_json::Value as JsonValue;
 use serenity::{
     client::Context,
     model::{
@@ -345,17 +344,30 @@ impl SubApplication for DiscordHandler {
                         }
                     };
 
-                    if let Some(o) = response.as_object() {
-                        if !o.contains_key("candidates") {
-                            info!("skip empty response");
-                            continue;
-                        }
-                    } else {
-                        error!("Received error from Google AI received object is not an object - {response}");
-                        return;
-                    }
+                    debug!("Received response - {response:?}");
 
-                    let response: GeminiResponse = match serde_json::from_value(response) {
+                    let JsonValue::Object(mut response) = response else {
+                        error!("Received error from Google AI. received data is not an object - {response:?}");
+                        return;
+                    };
+                    
+
+                    let Some(candidates) = response.remove("candidates") else {
+                        info!("candidates does not exist. ignore.");
+                        continue;
+                    };
+
+                    let JsonValue::Array(mut candidates) = candidates else {
+                        error!("Received error from Google AI. $.candidates is not an array - {response:?}");
+                        return;
+                    };
+
+                    let Some(candidate) = candidates.drain(0..1).next() else {
+                        info!("candidates is empty. ignore.");
+                        continue;
+                    };
+
+                    let first_candidate: Candidate = match serde_json::from_value(candidate) {
                         Ok(response) => response,
                         Err(e) => {
                             error!("Failed to parse received response from Google AI - {e:?}");
@@ -365,18 +377,11 @@ impl SubApplication for DiscordHandler {
 
                     joined_response.truncate(joined_response.len() - WORKING_INDICATOR.len());
                     joined_response.extend(
-                        response
-                            .candidates
+                        first_candidate
+                            .content
+                            .parts
                             .into_iter()
-                            .next()
-                            .into_iter()
-                            .flat_map(|candidate| {
-                                candidate
-                                    .content
-                                    .parts
-                                    .into_iter()
-                                    .filter_map(|part| part.text)
-                            }),
+                            .filter_map(|part| part.text),
                     );
                     joined_response.push_str(WORKING_INDICATOR);
 
