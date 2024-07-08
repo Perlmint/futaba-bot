@@ -1,8 +1,13 @@
+use anyhow::anyhow;
 use axum::async_trait;
 use futures::stream::StreamExt;
 use google_generative_ai_rs::v1::{
     api::Client as GoogleAiClient,
-    gemini::{request::Request, response::Candidate, Content, Model, Part, ResponseType, Role},
+    gemini::{
+        request::Request,
+        response::{Candidate, FinishReason},
+        Content, Model, Part, ResponseType, Role,
+    },
 };
 use log::*;
 use once_cell::sync::OnceCell;
@@ -331,16 +336,20 @@ impl SubApplication for DiscordHandler {
 
         let context = context.clone();
         tokio::task::spawn(async move {
-            if let Some(mut json_stream) = response
+            let result = if let Some(mut json_stream) = response
                 .streamed()
                 .and_then(|stream_response| stream_response.response_stream)
             {
-                while let Some(response) = json_stream.next().await {
+                loop {
+                    let Some(response) = json_stream.next().await else {
+                        break Ok(());
+                    };
+
                     let response = match response {
                         Ok(response) => response,
                         Err(e) => {
                             error!("Received error from Google AI - {e:?}");
-                            return;
+                            break Err(anyhow!("Received Error"));
                         }
                     };
 
@@ -348,9 +357,8 @@ impl SubApplication for DiscordHandler {
 
                     let JsonValue::Object(mut response) = response else {
                         error!("Received error from Google AI. received data is not an object - {response:?}");
-                        return;
+                        break Err(anyhow!("Received Invalid response"));
                     };
-                    
 
                     let Some(candidates) = response.remove("candidates") else {
                         info!("candidates does not exist. ignore.");
@@ -358,27 +366,50 @@ impl SubApplication for DiscordHandler {
                     };
 
                     let JsonValue::Array(mut candidates) = candidates else {
-                        error!("Received error from Google AI. $.candidates is not an array - {response:?}");
-                        return;
+                        error!("$.candidates is not an array - {response:?}");
+                        break Err(anyhow!("Received invalid response"));
                     };
 
-                    let Some(candidate) = candidates.drain(0..1).next() else {
-                        info!("candidates is empty. ignore.");
+                    let Some(mut candidate) = candidates.drain(0..1).next() else {
+                        info!("Received candidates is empty. ignore.");
                         continue;
                     };
 
-                    let first_candidate: Candidate = match serde_json::from_value(candidate) {
+                    let JsonValue::Object(mut candidate) = candidate else {
+                        error!("$.candidates[0] is not an object");
+                        break Err(anyhow!("Received Invalid response"));
+                    };
+
+                    let Some(content) = candidate.remove("content") else {
+                        let Some(finish_reason) = candidate.remove("finishReason") else {
+                            error!("$.candidates[0].finishReason and $.candidates[0].content does not exist.");
+                            break Err(anyhow!("Received Invalid response"));
+                        };
+
+                        let finish_reason: FinishReason = match serde_json::from_value(
+                            finish_reason,
+                        ) {
+                            Ok(v) => v,
+                            Err(e) => {
+                                error!("Failed to parse $.candidates[0].finishReason. - {e:?}");
+                                break Err(anyhow!("Received Invalid response"));
+                            }
+                        };
+
+                        break Err(anyhow!("Stop by - {finish_reason}"));
+                    };
+
+                    let first_candidate: Content = match serde_json::from_value(content) {
                         Ok(response) => response,
                         Err(e) => {
                             error!("Failed to parse received response from Google AI - {e:?}");
-                            return;
+                            break Err(anyhow!("Received Invalid response"));
                         }
                     };
 
                     joined_response.truncate(joined_response.len() - WORKING_INDICATOR.len());
                     joined_response.extend(
                         first_candidate
-                            .content
                             .parts
                             .into_iter()
                             .filter_map(|part| part.text),
@@ -392,10 +423,16 @@ impl SubApplication for DiscordHandler {
                         error!("Failed to report error by reply - {e:?}");
                     }
                 }
-            }
+            } else {
+                Ok(())
+            };
 
             joined_response.truncate(joined_response.len() - WORKING_INDICATOR.len());
-            joined_response.push_str(END_INDICATOR);
+            if let Err(e) = result {
+                joined_response.push_str(&format!("`<ERROR: {e}>`"));
+            } else {
+                joined_response.push_str(END_INDICATOR);
+            }
             if let Err(e) = reply
                 .edit(context, |builder| builder.content(joined_response))
                 .await
